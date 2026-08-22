@@ -1,0 +1,1547 @@
+# Pega aquí el contenido de tu spec de Swagger Editor (reemplaza todo este archivo)
+openapi: 3.1.0
+info:
+  title: T-Shirt Store API
+  version: "1.0.0"
+  description: T-Shirt Store API contract. Money is always integer cents. Dates are ISO 8601 UTC.
+servers:
+  # Added by API Auto Mocking Plugin
+  - description: SwaggerHub API Auto Mocking
+    url: https://virtserver.swaggerhub.com/ravn-112/T-shirt-Store-API/1.0.0
+  - url: https://api.tshirtstore.com/v1
+    description: Production
+  - url: http://localhost:3000/v1
+    description: Local
+
+tags:
+  - name: Auth
+  - name: Products
+  - name: Variants
+  - name: Categories
+  - name: Cart
+  - name: Likes
+  - name: Checkout
+  - name: Webhooks
+  - name: Orders
+  - name: PromoCodes
+  - name: Users
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ───────── AUTH ─────────
+  /auth/signup:
+    post:
+      tags: [Auth]
+      summary: Create a CLIENT account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, firstName, lastName]
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+                password: { type: string, minLength: 10, maxLength: 72 }
+                firstName: { type: string, minLength: 1, maxLength: 80 }
+                lastName: { type: string, minLength: 1, maxLength: 80 }
+            example:
+              email: guille@example.com
+              password: SuperSegura123
+              firstName: Guille
+              lastName: Maldonado
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /auth/signin:
+    post:
+      tags: [Auth]
+      summary: Login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: Tokens issued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthTokens" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate the token pair
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        "200":
+          description: New token pair
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthTokens" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /auth/signout:
+    post:
+      tags: [Auth]
+      summary: Sign out (revokes the refresh token)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken: { type: string }
+                all: { type: boolean, default: false }
+      responses:
+        "204": { description: Session closed }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Request a password reset
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "202": { description: "Always accepted, whether the account exists or not" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Complete the reset using the token sent by email
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, newPassword]
+              properties:
+                token: { type: string }
+                newPassword: { type: string, minLength: 10, maxLength: 72 }
+      responses:
+        "204": { description: Password updated }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /me:
+    get:
+      tags: [Auth]
+      summary: Current authenticated user
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /users:
+    get:
+      tags: [Users]
+      summary: List users by role (used to assign a delivery person)
+      parameters:
+        - name: role
+          in: query
+          required: true
+          schema: { type: string, enum: [DELIVERY] }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/UserBrief" }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ───────── CATALOG REFERENCE (read-only) ─────────
+  # Categories, colors and sizes are seeded, not created through the API.
+  # These GETs just fill selects when creating products/variants.
+  /categories:
+    get:
+      tags: [Categories]
+      summary: List categories
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Category" }
+
+  /colors:
+    get:
+      tags: [Variants]
+      summary: List available colors
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Color" }
+
+  /sizes:
+    get:
+      tags: [Variants]
+      summary: List available sizes, ordered by position
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Size" }
+
+  # ───────── PRODUCTS (read) ─────────
+  /products:
+    get:
+      tags: [Products]
+      summary: List products with filters and pagination
+      security: []
+      parameters:
+        - { name: category, in: query, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: colorId, in: query, schema: { type: string, format: uuid } }
+        - { name: sizeId, in: query, schema: { type: string, format: uuid } }
+        - { name: minPriceCents, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: maxPriceCents, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: includeInactive, in: query, schema: { type: boolean, default: false }, description: "MANAGER only" }
+        - { name: sort, in: query, schema: { type: string, enum: [newest, priceAsc, priceDesc, name] } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ProductCard" }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401":
+          description: "includeInactive=true with no token"
+          content:
+            application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } }
+        "403":
+          description: "includeInactive=true with a role that isn't MANAGER"
+          $ref: "#/components/responses/Forbidden"
+
+  /products/{productId}:
+    parameters:
+      - { $ref: "#/components/parameters/ProductId" }
+    get:
+      tags: [Products]
+      summary: Product detail
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductDetail" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Products]
+      summary: Edit name/description (MANAGER)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, minLength: 1, maxLength: 160 }
+                description: { type: string, maxLength: 5000, nullable: true }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Products]
+      summary: Soft delete (MANAGER)
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /products/{productId}/disable:
+    parameters: [{ $ref: "#/components/parameters/ProductId" }]
+    post:
+      tags: [Products]
+      summary: Disable product (MANAGER)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  isActive: { type: boolean, example: false }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /products/{productId}/enable:
+    parameters: [{ $ref: "#/components/parameters/ProductId" }]
+    post:
+      tags: [Products]
+      summary: Enable product (MANAGER)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  isActive: { type: boolean, example: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /products/{productId}/categories:
+    parameters: [{ $ref: "#/components/parameters/ProductId" }]
+    put:
+      tags: [Products]
+      summary: Replace the product's categories (MANAGER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [categoryIds]
+              properties:
+                categoryIds:
+                  type: array
+                  maxItems: 10
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  categories:
+                    type: array
+                    items: { $ref: "#/components/schemas/Category" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /products/{productId}/images:
+    parameters: [{ $ref: "#/components/parameters/ProductId" }]
+    post:
+      tags: [Products]
+      summary: Upload an image (MANAGER)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                altText: { type: string, maxLength: 200 }
+      responses:
+        "201":
+          description: Created
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductImage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /products/{productId}/images/order:
+    parameters: [{ $ref: "#/components/parameters/ProductId" }]
+    put:
+      tags: [Products]
+      summary: Reorder the gallery (MANAGER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [imageIds]
+              properties:
+                imageIds:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  images:
+                    type: array
+                    items: { $ref: "#/components/schemas/ProductImage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /products/{productId}/images/{imageId}:
+    parameters:
+      - { $ref: "#/components/parameters/ProductId" }
+      - { name: imageId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Products]
+      summary: Edit alt text (MANAGER)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                altText: { type: string, maxLength: 200 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductImage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Products]
+      summary: Delete image (MANAGER)
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  # ───────── VARIANTS ─────────
+  /products/{productId}/variants:
+    parameters: [{ $ref: "#/components/parameters/ProductId" }]
+    get:
+      tags: [Variants]
+      summary: Variants with real stock (MANAGER)
+      parameters:
+        - { name: includeInactive, in: query, schema: { type: boolean } }
+        - { name: lowStock, in: query, schema: { type: boolean } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Variant" }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Variants]
+      summary: Create a variant (MANAGER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateVariantDto" }
+      responses:
+        "201":
+          description: Created
+          headers: { Location: { schema: { type: string } } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Variant" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /variants/{variantId}:
+    parameters: [{ $ref: "#/components/parameters/VariantId" }]
+    patch:
+      tags: [Variants]
+      summary: Edit price/SKU (MANAGER)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sku: { type: string, minLength: 1, maxLength: 64 }
+                priceCents: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Variant" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [Variants]
+      summary: Delete variant (only if it was never sold) (MANAGER)
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /variants/{variantId}/stock:
+    parameters: [{ $ref: "#/components/parameters/VariantId" }]
+    post:
+      tags: [Variants]
+      summary: Manually adjust stock, by delta (MANAGER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deltaUnits]
+              properties:
+                deltaUnits:
+                  type: integer
+                  not: { const: 0 }
+                  description: "Positive adds stock, negative subtracts it. Can't be 0. Use for restocking or fixing a count — a sale reduces stock on its own, see /webhooks/stripe."
+                  example: -3
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  variantId: { type: string, format: uuid }
+                  previousStock: { type: integer }
+                  stock: { type: integer }
+                  crossedLowStockThreshold: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /variants/{variantId}/disable:
+    parameters: [{ $ref: "#/components/parameters/VariantId" }]
+    post:
+      tags: [Variants]
+      summary: Disable variant (MANAGER)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  isActive: { type: boolean, example: false }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /variants/{variantId}/enable:
+    parameters: [{ $ref: "#/components/parameters/VariantId" }]
+    post:
+      tags: [Variants]
+      summary: Enable variant (MANAGER)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  isActive: { type: boolean, example: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ───────── CART / LIKES ─────────
+  /products/{productId}/like:
+    parameters: [{ $ref: "#/components/parameters/ProductId" }]
+    put:
+      tags: [Likes]
+      summary: Like a product (idempotent, CLIENT)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  productId: { type: string, format: uuid }
+                  liked: { type: boolean }
+                  likesCount: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Likes]
+      summary: Unlike (CLIENT, idempotent)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  productId: { type: string, format: uuid }
+                  liked: { type: boolean, example: false }
+                  likesCount: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /me/cart:
+    get:
+      tags: [Cart]
+      summary: View my cart (CLIENT)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Cart" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /me/cart/items:
+    post:
+      tags: [Cart]
+      summary: Add/increment a variant in the cart (CLIENT)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [productVariantId, quantity]
+              properties:
+                productVariantId: { type: string, format: uuid }
+                quantity: { type: integer, minimum: 1, maximum: 99 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Cart" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [Cart]
+      summary: Empty the cart (CLIENT)
+      responses:
+        "204": { description: Emptied }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /me/cart/items/{itemId}:
+    parameters:
+      - { name: itemId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Cart]
+      summary: Set the quantity of a line (CLIENT)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quantity]
+              properties:
+                quantity: { type: integer, minimum: 1, maximum: 99 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Cart" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [Cart]
+      summary: Remove a line (CLIENT)
+      responses:
+        "204": { description: Removed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ───────── CHECKOUT / WEBHOOKS ─────────
+  /checkout/payment-link:
+    post:
+      tags: [Checkout]
+      summary: Direct purchase of a single variant, no cart (CLIENT)
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [productVariantId, quantity]
+              properties:
+                productVariantId: { type: string, format: uuid }
+                quantity: { type: integer, minimum: 1, maximum: 99 }
+                promoCode: { type: string }
+                successUrl: { type: string, format: uri }
+                cancelUrl: { type: string, format: uri }
+      responses:
+        "201":
+          description: Link generated. Stock is only reduced once Stripe confirms the payment (see /webhooks/stripe).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orderId: { type: string, format: uuid }
+                  paymentUrl: { type: string, format: uri }
+                  expiresAt: { type: string, format: date-time }
+                  totalCents: { type: integer }
+                  currency: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /checkout/payment-intent:
+    post:
+      tags: [Checkout]
+      summary: Checkout the full cart (CLIENT)
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                promoCode: { type: string }
+                expectedTotalCents: { type: integer }
+      responses:
+        "201":
+          description: Payment intent created. Stock is only reduced once Stripe confirms the payment (see /webhooks/stripe).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orderId: { type: string, format: uuid }
+                  clientSecret: { type: string }
+                  subtotalCents: { type: integer }
+                  discountCents: { type: integer }
+                  totalCents: { type: integer }
+                  currency: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /webhooks/stripe:
+    post:
+      tags: [Webhooks]
+      summary: Stripe webhook (no auth, verified by signature)
+      description: >-
+        This is where the payment gets confirmed and the purchased stock is deducted.
+        Handles checkout.session.completed (Payment Link) and payment_intent.succeeded (cart checkout).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200": { description: Processed (or already seen before) }
+        "400": { description: Invalid signature }
+
+  # ───────── ORDERS ─────────
+  /orders:
+    get:
+      tags: [Orders]
+      summary: List orders (CLIENT sees their own, MANAGER sees all, DELIVERY sees the ones assigned to them)
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - name: status
+          in: query
+          schema: { type: string, enum: [PENDING, PAID, PROCESSING, SHIPPED, DELIVERED, CANCELLED] }
+        - { name: minTotalCents, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: maxTotalCents, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: userId, in: query, schema: { type: string, format: uuid }, description: "MANAGER only" }
+        - { name: deliveryPersonId, in: query, schema: { type: string, format: uuid }, description: "MANAGER only" }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/OrderSummary" }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /orders/{orderId}:
+    parameters: [{ $ref: "#/components/parameters/OrderId" }]
+    get:
+      tags: [Orders]
+      summary: Order detail. Only the owner (CLIENT), MANAGER, or the assigned delivery person.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /orders/{orderId}/status:
+    parameters: [{ $ref: "#/components/parameters/OrderId" }]
+    patch:
+      tags: [Orders]
+      summary: Advance the status (MANAGER does PAID→PROCESSING→SHIPPED, DELIVERY does SHIPPED→DELIVERED)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [PROCESSING, SHIPPED, DELIVERED] }
+                deliveryPersonId: { type: string, format: uuid, description: "Required when status=SHIPPED" }
+                note: { type: string, maxLength: 255 }
+              if:
+                properties: { status: { const: SHIPPED } }
+              then:
+                required: [status, deliveryPersonId]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /orders/{orderId}/cancel:
+    parameters: [{ $ref: "#/components/parameters/OrderId" }]
+    post:
+      tags: [Orders]
+      summary: Cancel an order before it's SHIPPED (owning CLIENT or MANAGER)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  # ───────── PROMO CODES ─────────
+  /promo-codes:
+    get:
+      tags: [PromoCodes]
+      summary: List promo codes, filterable by code (MANAGER)
+      parameters:
+        - { name: code, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/PromoCode" }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [PromoCodes]
+      summary: Create a promo code (MANAGER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePromoCodeDto" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PromoCode" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /promo-codes/{promoCodeId}:
+    parameters:
+      - { name: promoCodeId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [PromoCodes]
+      summary: Edit limits/expiration (MANAGER)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                discountValue: { type: integer, minimum: 1 }
+                minPurchaseCents: { type: integer, minimum: 0, nullable: true }
+                usageLimit: { type: integer, minimum: 1, nullable: true }
+                expiresAt: { type: string, format: date-time, nullable: true }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PromoCode" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /promo-codes/{promoCodeId}/disable:
+    parameters:
+      - { name: promoCodeId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [PromoCodes]
+      summary: Disable a promo code (MANAGER)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  status: { type: string, enum: [ACTIVE, DISABLED, EXPIRED, EXHAUSTED], example: DISABLED }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /promo-codes/{promoCodeId}/enable:
+    parameters:
+      - { name: promoCodeId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [PromoCodes]
+      summary: Re-enable a promo code (MANAGER)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  status: { type: string, enum: [ACTIVE, DISABLED, EXPIRED, EXHAUSTED], example: ACTIVE }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /promo-codes/validate:
+    post:
+      tags: [PromoCodes]
+      summary: Preview the discount before paying (CLIENT)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+                productVariantId: { type: string, format: uuid }
+                quantity: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Validation result (always 200, valid or not)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: string }
+                  valid: { type: boolean }
+                  reason:
+                    type: string
+                    nullable: true
+                    enum: [NOT_FOUND, DISABLED, EXPIRED, USAGE_LIMIT_REACHED, MIN_PURCHASE_NOT_MET]
+                  discountType: { type: string, enum: [PERCENTAGE, FIXED] }
+                  discountCents: { type: integer }
+                  subtotalCents: { type: integer }
+                  totalCents: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+    ProductId:
+      name: productId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    VariantId:
+      name: variantId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: "Prevents creating a duplicate order if the request is repeated (double click, network retry)"
+      schema: { type: string, maxLength: 128 }
+
+  responses:
+    BadRequest:
+      description: Invalid data
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+          example:
+            type: "https://api.tshirtstore.com/errors/validation"
+            title: "Validation failed"
+            status: 400
+            detail: "One or more fields are invalid"
+            code: "VALIDATION_ERROR"
+            requestId: "01J9Z0000000000000000001"
+            errors: [{ field: "field", message: "reason for the error" }]
+    Unauthorized:
+      description: No valid credential
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+          example:
+            type: "https://api.tshirtstore.com/errors/unauthorized"
+            title: "Unauthorized"
+            status: 401
+            detail: "The request could not be authenticated"
+            code: "UNAUTHORIZED"
+            requestId: "01J9Z0000000000000000002"
+    Forbidden:
+      description: Role has no permission on this resource
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+          example:
+            type: "https://api.tshirtstore.com/errors/forbidden"
+            title: "Forbidden"
+            status: 403
+            detail: "You don't have permission for this action"
+            code: "FORBIDDEN"
+            requestId: "01J9Z0000000000000000003"
+    NotFound:
+      description: Doesn't exist, or isn't visible to whoever is asking
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+          example:
+            type: "https://api.tshirtstore.com/errors/not-found"
+            title: "Not Found"
+            status: 404
+            detail: "The resource doesn't exist"
+            code: "NOT_FOUND"
+            requestId: "01J9Z0000000000000000004"
+    Conflict:
+      description: The current state doesn't allow this operation
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+          example:
+            type: "https://api.tshirtstore.com/errors/conflict"
+            title: "Conflict"
+            status: 409
+            detail: "This operation isn't valid right now"
+            code: "CONFLICT"
+            requestId: "01J9Z0000000000000000005"
+    TooManyRequests:
+      description: Rate limit exceeded
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+          example:
+            type: "https://api.tshirtstore.com/errors/rate-limited"
+            title: "Too Many Requests"
+            status: 429
+            detail: "Too many attempts, please wait a moment"
+            code: "RATE_LIMITED"
+            requestId: "01J9Z0000000000000000006"
+    PayloadTooLarge:
+      description: File too large
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+          example:
+            type: "https://api.tshirtstore.com/errors/payload-too-large"
+            title: "Payload Too Large"
+            status: 413
+            detail: "The file exceeds the maximum size"
+            code: "FILE_TOO_LARGE"
+            requestId: "01J9Z0000000000000000007"
+    UnsupportedMediaType:
+      description: Unsupported file type
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+          example:
+            type: "https://api.tshirtstore.com/errors/unsupported-media-type"
+            title: "Unsupported Media Type"
+            status: 415
+            detail: "This file type isn't allowed"
+            code: "UNSUPPORTED_MEDIA_TYPE"
+            requestId: "01J9Z0000000000000000008"
+    ServiceUnavailable:
+      description: An external dependency is down
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+          example:
+            type: "https://api.tshirtstore.com/errors/service-unavailable"
+            title: "Service Unavailable"
+            status: 503
+            detail: "The service isn't responding, please try again in a few minutes"
+            code: "SERVICE_UNAVAILABLE"
+            requestId: "01J9Z0000000000000000009"
+
+  schemas:
+    Problem:
+      type: object
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        code: { type: string }
+        requestId: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              message: { type: string }
+
+    PageMeta:
+      type: object
+      properties:
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+        hasMore: { type: boolean }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        firstName: { type: string }
+        lastName: { type: string }
+        role: { type: string, enum: [MANAGER, CLIENT, DELIVERY] }
+        createdAt: { type: string, format: date-time }
+
+    UserBrief:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        firstName: { type: string }
+        lastName: { type: string }
+
+    AuthTokens:
+      type: object
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        tokenType: { type: string, example: Bearer }
+        expiresIn: { type: integer, example: 900 }
+
+    Color:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        hexCode: { type: string, example: "#1A1A1A" }
+
+    Size:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, example: "M" }
+        position: { type: integer }
+
+    Category:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+
+    ProductImage:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        altText: { type: string, nullable: true }
+        position: { type: integer }
+
+    Variant:
+      type: object
+      description: "Includes real stock. Only visible to MANAGER."
+      properties:
+        id: { type: string, format: uuid }
+        sku: { type: string }
+        color: { $ref: "#/components/schemas/Color" }
+        size: { $ref: "#/components/schemas/Size" }
+        priceCents: { type: integer }
+        stock: { type: integer }
+        isActive: { type: boolean }
+
+    PublicVariant:
+      type: object
+      description: "For the public catalog and cart. Never exposes the exact stock."
+      properties:
+        id: { type: string, format: uuid }
+        sku: { type: string }
+        color: { $ref: "#/components/schemas/Color" }
+        size: { $ref: "#/components/schemas/Size" }
+        priceCents: { type: integer }
+        isActive: { type: boolean }
+        availableQuantity: { type: integer, example: 10, description: "min(stock, 10)" }
+        lowStock: { type: boolean, description: "true if stock <= 3" }
+
+    ProductCard:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        priceRange:
+          type: object
+          properties:
+            minCents: { type: integer }
+            maxCents: { type: integer }
+        primaryImage: { $ref: "#/components/schemas/ProductImage" }
+        categories:
+          type: array
+          items: { $ref: "#/components/schemas/Category" }
+        inStock: { type: boolean }
+        likesCount: { type: integer }
+        likedByMe: { type: boolean }
+
+    ProductDetail:
+      allOf:
+        - $ref: "#/components/schemas/ProductCard"
+        - type: object
+          properties:
+            description: { type: string, nullable: true }
+            isActive: { type: boolean }
+            images:
+              type: array
+              items: { $ref: "#/components/schemas/ProductImage" }
+            variants:
+              type: array
+              items: { $ref: "#/components/schemas/PublicVariant" }
+
+    CreateProductDto:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 160 }
+        description: { type: string, maxLength: 5000 }
+        isActive: { type: boolean, default: false }
+        categoryIds:
+          type: array
+          maxItems: 10
+          items: { type: string, format: uuid }
+        variants:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/CreateVariantDto" }
+
+    CreateVariantDto:
+      type: object
+      required: [colorId, sizeId, sku, priceCents]
+      properties:
+        colorId: { type: string, format: uuid }
+        sizeId: { type: string, format: uuid }
+        sku: { type: string, minLength: 1, maxLength: 64 }
+        priceCents: { type: integer, minimum: 1 }
+        stock: { type: integer, minimum: 0, default: 0 }
+        isActive: { type: boolean, default: true }
+
+    CartItem:
+      type: object
+      description: "Includes real stock, since it belongs to the current user."
+      properties:
+        id: { type: string, format: uuid }
+        variant: { $ref: "#/components/schemas/Variant" }
+        quantity: { type: integer }
+        lineTotalCents: { type: integer }
+        available: { type: boolean }
+        maxQuantity: { type: integer }
+        issues:
+          type: array
+          items: { type: string, enum: [OUT_OF_STOCK, INSUFFICIENT_STOCK, VARIANT_DISABLED, PRODUCT_UNAVAILABLE] }
+
+    Cart:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/CartItem" }
+        subtotalCents: { type: integer }
+        itemCount: { type: integer }
+        hasUnavailableItems: { type: boolean }
+
+    OrderItemLine:
+      type: object
+      properties:
+        productName: { type: string }
+        variantLabel: { type: string }
+        quantity: { type: integer }
+        unitPriceCents: { type: integer }
+        lineTotalCents: { type: integer }
+
+    OrderSummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [PENDING, PAID, PROCESSING, SHIPPED, DELIVERED, CANCELLED] }
+        createdAt: { type: string, format: date-time }
+        subtotalCents: { type: integer }
+        discountCents: { type: integer }
+        totalCents: { type: integer }
+        currency: { type: string }
+        itemCount: { type: integer }
+        paymentMethod: { type: string, enum: [PAYMENT_LINK, PAYMENT_INTENT] }
+        promoCode: { type: string, nullable: true }
+        deliveryPersonId: { type: string, format: uuid, nullable: true }
+
+    OrderDetail:
+      allOf:
+        - $ref: "#/components/schemas/OrderSummary"
+        - type: object
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/OrderItemLine" }
+            payment:
+              type: object
+              properties:
+                method: { type: string }
+                status: { type: string }
+                amountCents: { type: integer }
+                paidAt: { type: string, format: date-time, nullable: true }
+                refundedAt: { type: string, format: date-time, nullable: true }
+            statusHistory:
+              type: array
+              items:
+                type: object
+                properties:
+                  status: { type: string }
+                  note: { type: string, nullable: true }
+                  changedByUserId:
+                    type: string
+                    format: uuid
+                    nullable: true
+                    description: "NULL if the webhook made the change, not a person"
+                  createdAt: { type: string, format: date-time }
+            customer:
+              type: object
+              nullable: true
+              properties:
+                id: { type: string, format: uuid }
+                firstName: { type: string }
+                lastName: { type: string }
+            deliveryPerson:
+              type: object
+              nullable: true
+              properties:
+                id: { type: string, format: uuid }
+                firstName: { type: string }
+                lastName: { type: string }
+
+    PromoCode:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        discountType: { type: string, enum: [PERCENTAGE, FIXED] }
+        discountValue: { type: integer }
+        minPurchaseCents: { type: integer, nullable: true }
+        usageLimit: { type: integer, nullable: true }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        status: { type: string, enum: [ACTIVE, DISABLED, EXPIRED, EXHAUSTED] }
+        timesUsed: { type: integer }
+
+    CreatePromoCodeDto:
+      type: object
+      required: [code, discountType, discountValue]
+      properties:
+        code: { type: string, minLength: 1, maxLength: 40 }
+        discountType: { type: string, enum: [PERCENTAGE, FIXED] }
+        discountValue:
+          type: integer
+          minimum: 1
+          description: "1-100 if PERCENTAGE, cents if FIXED"
+        minPurchaseCents: { type: integer, minimum: 0 }
+        usageLimit: { type: integer, minimum: 1 }
+        expiresAt: { type: string, format: date-time }
+        isActive: { type: boolean, default: true }
