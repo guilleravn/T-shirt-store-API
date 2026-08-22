@@ -1,4 +1,3 @@
-# Pega aquí el contenido de tu spec de Swagger Editor (reemplaza todo este archivo)
 openapi: 3.1.0
 info:
   title: T-Shirt Store API
