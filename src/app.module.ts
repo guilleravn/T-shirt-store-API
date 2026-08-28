@@ -7,6 +7,7 @@ import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
 import { envValidationSchema } from './config/env.validation';
 import { AuthModule } from './auth/auth.module';
+import { CatalogModule } from './catalog/catalog.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { AuthModule } from './auth/auth.module';
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 20 }]),
     PrismaModule,
     AuthModule,
+    CatalogModule,
   ],
   controllers: [AppController],
   providers: [AppService],
