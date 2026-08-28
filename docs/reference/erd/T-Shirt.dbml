@@ -1,0 +1,420 @@
+// ═══════════════════════════════════════════════════════════
+//  T-SHIRT STORE API — ERD
+//  20 tablas · IDs uuid · Una sola moneda, sin impuestos ni envio
+//
+//  REGLAS QUE SOSTIENEN EL MODELO
+//
+//   R1. Tras PAID, orders y sus order_items son inmutables.
+//       Politica de negocio, NO la defensa de total_cents: esa
+//       la da el CHECK (total = subtotal - discount).
+//
+//   R2. orders.status y order_status_history se escriben
+//       siempre en la misma transaccion, desde un solo metodo.
+//
+//   R3. El stock se descuenta con un UPDATE condicional que
+//       bloquea, detecta y reporta en una sola sentencia:
+//         UPDATE product_variants SET stock = stock - $qty
+//          WHERE id = $1 AND stock >= $qty RETURNING stock;
+//       0 filas afectadas = no alcanza (ver R8). El nuevo stock
+//       viene en RETURNING y el anterior es nuevo + qty, asi que
+//       el cruce del umbral de 3 se calcula sin un SELECT aparte.
+//       El CHECK (stock >= 0) queda como backstop de bugs, nunca
+//       como control de flujo: una excepcion dentro del webhook
+//       hace rollback, deja processed_at en NULL y dispara el
+//       bucle de reintentos de 3 dias de Stripe.
+//
+//   R4. Los eventos de Stripe se insertan con processed_at NULL
+//       y se marcan al terminar; un duplicado con processed_at
+//       NULL se reprocesa.
+//
+//   R5. El uso de un cupon se cuenta sobre promo_redemptions
+//       unidas a orders con status <> CANCELLED, precedido de
+//       SELECT ... FROM promo_codes WHERE id = $1 FOR UPDATE.
+//       Contar-y-despues-insertar es el mismo read-then-write
+//       por el que se descarto used_count: sin el lock, dos
+//       checkouts concurrentes con 99 usos leen 99 y pasan los
+//       dos. Un job cancela ordenes PENDING vencidas y libera
+//       la redencion.
+//
+//   R6. Todo el dinero se guarda, se transporta y se calcula en
+//       centavos enteros. La API tambien expone centavos, igual
+//       que Stripe. Solo el frontend y las plantillas de email
+//       dividen por 100 para mostrar. Los descuentos
+//       porcentuales se redondean con Math.round.
+//
+//   R7. El manager asigna delivery_person_id en la transicion
+//       PROCESSING -> SHIPPED, dentro de la misma transaccion
+//       de R2. Sin ese momento definido, la columna y su indice
+//       quedan siempre en NULL y muertos.
+//
+//   R8. Si el UPDATE de R3 afecta 0 filas, el webhook NO aborta:
+//       marca la orden PAID (el cliente pago, es la verdad), no
+//       descuenta stock, y registra el faltante en
+//       order_status_history.note. La transaccion commitea,
+//       processed_at se marca y Stripe deja de reintentar.
+//       Sin esta regla, validar stock al crear el Payment Intent
+//       y descontarlo recien en el webhook deja una ventana de
+//       sobreventa que termina en orden pagada y PENDING eterna.
+//
+//  CONSTRAINTS QUE DBML NO SOPORTA — ver T-Shirt-constraints.sql
+// ═══════════════════════════════════════════════════════════
+
+Enum user_role {
+  MANAGER
+  CLIENT
+  DELIVERY
+}
+
+Enum order_status {
+  PENDING
+  PAID
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+Enum payment_method {
+  PAYMENT_LINK
+  PAYMENT_INTENT
+}
+
+Enum payment_status {
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+Enum discount_type {
+  PERCENTAGE
+  FIXED
+}
+
+
+// ─────────────────────── AUTH ───────────────────────
+
+Table users {
+  id            uuid        [pk, default: `gen_random_uuid()`]
+  email         citext      [unique, not null]
+  password_hash text        [not null]
+  first_name    varchar(80) [not null]
+  last_name     varchar(80) [not null]
+  role          user_role   [not null, default: 'CLIENT']
+  created_at    timestamptz [not null, default: `now()`]
+  updated_at    timestamptz [not null, default: `now()`]
+
+  Note: 'Sin columna de token: un token no es un atributo del usuario sino un evento, y por eso vive en refresh_tokens (1:N). Un usuario recien registrado que nunca inicio sesion tiene cero filas alli. Sin tabla de permisos: 3 roles fijos, CASL define las abilities en codigo. El signup siempre crea CLIENT; MANAGER y DELIVERY se crean por seed. citext evita cuentas duplicadas por mayusculas.'
+}
+
+Table refresh_tokens {
+  id         uuid        [pk, default: `gen_random_uuid()`]
+  user_id    uuid        [not null, ref: > users.id]
+  token_hash text        [unique, not null]
+  expires_at timestamptz [not null]
+  revoked_at timestamptz [null]
+  created_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    (user_id, revoked_at)
+  }
+  Note: 'Una fila = una sesion. La primera nace en el login, no en el signup. Se guarda el hash, nunca el token. Rotacion en cada refresh: se marca revoked_at en la fila vieja y se inserta una nueva. Conservar las revocadas (en vez de DELETE) permite detectar reuso de un token ya rotado, que es la senal de robo. Sign out = revocar sin insertar sucesora. RFC 9700 exige rotacion o sender-constraining para clientes publicos. El access token (15 min) sobrevive hasta expirar: trade-off aceptado. Requiere job de limpieza: DELETE de expiradas y de revocadas de mas de 48h.'
+}
+
+Table password_reset_tokens {
+  id         uuid        [pk, default: `gen_random_uuid()`]
+  user_id    uuid        [not null, ref: > users.id]
+  token_hash text        [unique, not null]
+  expires_at timestamptz [not null]
+  used_at    timestamptz [null]
+  created_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    (user_id, created_at)
+  }
+  Note: 'Un solo uso: used_at marca el consumo y no nace ninguna sucesora, a diferencia de refresh_tokens. Se guarda el hash, nunca el token: con tokens en crudo una filtracion permite tomar cualquier cuenta. El indice (user_id, created_at) habilita el rate limit por cuenta, que sobrevive a la rotacion de IPs. Al completarse un reset se revocan todos los refresh_tokens del usuario.'
+}
+
+
+// ────────────────────── CATALOG ──────────────────────
+
+Table categories {
+  id         uuid        [pk, default: `gen_random_uuid()`]
+  name       varchar(80) [unique, not null]
+  slug       varchar(80) [unique, not null]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+
+  Note: 'slug NO es una desnormalizacion ni una violacion de nada: como no se regenera al renombrar, la dependencia name -> slug no se cumple. Es un identificador publico independiente que casualmente se inicializa desde name, para que las URLs ya indexadas no se rompan cuando marketing cambia un nombre. Ademas name es UNIQUE, o sea clave candidata, asi que cualquier dependencia sobre el estaria permitida igual.'
+}
+
+Table products {
+  id          uuid         [pk, default: `gen_random_uuid()`]
+  name        varchar(160) [not null]
+  description text         [null]
+  is_active   boolean      [not null, default: true]
+  deleted_at  timestamptz  [null]
+  created_at  timestamptz  [not null, default: `now()`]
+  updated_at  timestamptz  [not null, default: `now()`]
+
+  indexes {
+    (is_active, deleted_at)
+  }
+  Note: 'Sin precio ni stock: viven en product_variants. El challenge pide delete Y disable como features distintas: is_active=false lo saca del catalogo pero el manager lo ve; deleted_at lo saca de todos lados. El borrado fisico esta prohibido y ademas es imposible: product_variants lo referencia con RESTRICT, y order_items referencia a las variantes, asi que la cadena que protege el historial esta cerrada por FK y no solo por convencion.'
+}
+
+Table product_categories {
+  product_id  uuid [not null, ref: > products.id]
+  category_id uuid [not null, ref: > categories.id]
+
+  indexes {
+    (product_id, category_id) [pk]
+    (category_id)
+  }
+  Note: 'Un producto puede estar en varias categorias. Sin atributos no primos, asi que 2FN se cumple trivialmente. El indice por category_id sirve al "search products by category": la PK compuesta arranca por product_id y no cubre esa consulta.'
+}
+
+Table product_images {
+  id         uuid         [pk, default: `gen_random_uuid()`]
+  product_id uuid         [not null, ref: > products.id]
+  s3_key     varchar(512) [not null]
+  alt_text   varchar(200) [null]
+  position   int          [not null, default: 0]
+  created_at timestamptz  [not null, default: `now()`]
+
+  indexes {
+    (product_id, position)
+  }
+  Note: 'Se guarda la key de S3, no la URL: cambiar de bucket o pasar a URLs firmadas no requiere migracion, y una URL firmada ni siquiera existe hasta que alguien pide la imagen. Se usa position y no is_primary porque la galeria necesita orden igual, y un booleano exigiria ademas una columna de orden. Postgres SI puede impedir dos primarias con un indice unico parcial (WHERE is_primary), asi que ese no es el argumento; el argumento es que position resuelve dos necesidades con una columna. Determinismo de la imagen principal: ORDER BY position, created_at, id LIMIT 1. NO se pone UNIQUE(product_id, position) porque las imagenes se reordenan seguido y el unique exigiria constraint diferible o posiciones negativas temporales.'
+}
+
+Table colors {
+  id         uuid        [pk, default: `gen_random_uuid()`]
+  name       varchar(50) [unique, not null]
+  hex_code   char(7)     [not null]
+  created_at timestamptz [not null, default: `now()`]
+
+  Note: 'hex_code es lo que justifica la tabla: con texto libre en la variante no habria con que pintar el selector de color. name -> hex_code es una dependencia sobre clave candidata (name es UNIQUE), o sea BCNF-safe.'
+}
+
+Table sizes {
+  id         uuid        [pk, default: `gen_random_uuid()`]
+  name       varchar(20) [unique, not null]
+  position   int         [not null]
+  created_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    (position) [unique]
+  }
+  Note: 'position existe porque S/M/L/XL no se ordenan alfabeticamente. Aca SI va UNIQUE(position) y en product_images no, y la diferencia es la frecuencia de escritura: los talles se siembran una vez y no se reordenan, las imagenes si. Sembrar con huecos (10, 20, 30, 40) para que insertar XS mas adelante no obligue a correr todo. Sin el unique, dos talles pueden compartir posicion y el selector se ordena al azar.'
+}
+
+Table product_variants {
+  id          uuid        [pk, default: `gen_random_uuid()`]
+  product_id  uuid        [not null, ref: > products.id]
+  color_id    uuid        [not null, ref: > colors.id]
+  size_id     uuid        [not null, ref: > sizes.id]
+  sku         varchar(64) [unique, not null]
+  price_cents int         [not null]
+  stock       int         [not null, default: 0]
+  is_active   boolean     [not null, default: true]
+  created_at  timestamptz [not null, default: `now()`]
+  updated_at  timestamptz [not null, default: `now()`]
+
+  indexes {
+    (product_id, color_id, size_id) [unique]
+  }
+  Note: 'La unidad que se vende y se cuenta. El precio vive aca, no en products (una XXL puede costar mas). El UNIQUE impide dos filas para la misma combinacion, que partiria el stock en dos lugares, y ademas sirve como indice por product_id gracias al prefijo: por eso NO hay un indice suelto de product_id. El sku se asigna, no se deriva de producto+color+talla: derivarlo haria que renombrar el producto cambiara el SKU historico. R3 y R8 gobiernan el descuento de stock. CHECK (stock >= 0) y CHECK (price_cents > 0) van en la migracion.'
+}
+
+
+// ───────────────────── ENGAGEMENT ─────────────────────
+
+Table product_likes {
+  user_id    uuid        [not null, ref: > users.id]
+  product_id uuid        [not null, ref: > products.id]
+  created_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    (user_id, product_id) [pk]
+    (product_id)
+  }
+  Note: 'Like a nivel producto, no variante: se likea la camiseta, no la talla M azul. created_at depende de la clave completa, asi que 2FN se cumple. La PK compuesta hace imposible likear dos veces lo mismo sin que el codigo lo verifique. El indice por product_id lo usa el job de stock bajo, que entra al reves que la PK. Ojo al escribir ese anti-join: la comparacion es a nivel PRODUCTO (likeo la remera) contra compras a nivel VARIANTE, o vas a notificar a gente que ya compro la misma remera en otro talle.'
+}
+
+Table carts {
+  id         uuid        [pk, default: `gen_random_uuid()`]
+  user_id    uuid        [unique, not null, ref: - users.id]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+
+  Note: 'UNIQUE(user_id): un carrito por usuario, permanente. Se vacian los items al confirmarse el pago (webhook), no al iniciar el checkout: si el pago se abandona el carrito sobrevive. La fila nunca se borra. Hoy la tabla no aporta ningun hecho que no este en users y cart_items.user_id haria lo mismo con una tabla menos; se conserva porque se vuelve indispensable ante carritos de invitado, multiples carritos por usuario (saved-for-later) o expiracion, y el costo es un JOIN.'
+}
+
+Table cart_items {
+  id                 uuid        [pk, default: `gen_random_uuid()`]
+  cart_id            uuid        [not null, ref: > carts.id]
+  product_variant_id uuid        [not null, ref: > product_variants.id]
+  quantity           int         [not null]
+  created_at         timestamptz [not null, default: `now()`]
+  updated_at         timestamptz [not null, default: `now()`]
+
+  indexes {
+    (cart_id, product_variant_id) [unique]
+  }
+  Note: 'Sin subtotal ni precio: el carrito muestra el presente, calculado al leer. Guardar el precio aqui mostraria un numero fantasma cuando el catalogo cambia. El UNIQUE convierte "agregar algo que ya esta" en un incremento de quantity. CHECK (quantity > 0) va en la migracion.'
+}
+
+
+// ─────────────────────── SALES ───────────────────────
+
+Table orders {
+  id                  uuid         [pk, default: `gen_random_uuid()`]
+  user_id             uuid         [not null, ref: > users.id]
+  delivery_person_id  uuid         [null, ref: > users.id]
+  status              order_status [not null, default: 'PENDING']
+
+  subtotal_cents      int          [not null]
+  discount_cents      int          [not null, default: 0]
+  total_cents         int          [not null]
+  currency            char(3)      [not null, default: 'USD']
+
+  created_at          timestamptz  [not null, default: `now()`]
+  updated_at          timestamptz  [not null, default: `now()`]
+
+  indexes {
+    (user_id, created_at)
+    (status, created_at)
+    (delivery_person_id, status)
+  }
+  Note: 'UNICA violacion de 3NF (y de BCNF) del schema: {subtotal_cents, discount_cents} -> total_cents, determinante que no es clave candidata sobre un atributo no primo. Se defiende con CHECK (total_cents = subtotal_cents - discount_cents), no con una regla escrita: un CHECK es una garantia, una regla es una convencion que no sobrevive a una migracion ni a un script de soporte. Por que se conserva la columna: total_cents es lo que se le PIDIO cobrar a Stripe (intencion, escrita antes, input del Payment Intent) y payments.amount_cents es lo que Stripe LIQUIDO (escrito despues, por webhook). Normalmente coinciden; cuando divergen, esa es la discrepancia de reconciliacion que ninguna de las dos columnas sola puede detectar. status duplica la ultima fila del historial, pero eso NO es 3NF: dentro de esta relacion status depende directo de id. Es redundancia entre relaciones, deliberada por rendimiento en listados paginados y protegida por R2. delivery_person_id no verifica el rol: se evaluo cerrarlo con UNIQUE(id, role) en users mas FK compuesta, y se dejo en la aplicacion por ser demasiada ceremonia para el alcance. SIN direccion de envio: la feature 9 enumera que contiene el detalle de una orden (productos, metodo de pago, total, estado) y el destino no esta; las tres acciones del repartidor son filtros por estado y transiciones. Si hiciera falta seria order_shipping_details con order_id como PK y sin user_id. Sin indice de total_cents: el unico filtro por precio (feature 9) siempre esta acotado a un usuario.'
+}
+
+Table order_items {
+  id                 uuid         [pk, default: `gen_random_uuid()`]
+  order_id           uuid         [not null, ref: > orders.id]
+  product_variant_id uuid         [not null, ref: > product_variants.id]
+  quantity           int          [not null]
+  unit_price_cents   int          [not null]
+  product_name       varchar(160) [not null]
+  variant_label      varchar(120) [not null]
+  created_at         timestamptz  [not null, default: `now()`]
+
+  indexes {
+    (order_id, product_variant_id) [unique]
+    (product_variant_id)
+  }
+  Note: 'unit_price_cents, product_name y variant_label son copias del momento de la compra, y NO son violacion de 3NF: la dependencia product_variant_id -> product_name no se cumple en esta relacion, porque dos filas con la misma variante pueden tener legitimamente nombres distintos si el producto se renombro entre las dos compras. Sin dependencia funcional no hay dependencia transitiva. Gracias a esto el historial no depende del catalogo. Sin subtotal: quantity x unit_price es calculo puro. El UNIQUE(order_id, product_variant_id) impide dos lineas de la misma variante con precios distintos (cart_items ya lo impedia y las ordenes nacen del carrito) y ademas sirve como indice por order_id por prefijo: por eso no hay un indice suelto. El indice por product_variant_id lo usa el anti-join del job de stock bajo. CHECK (quantity > 0) y CHECK (unit_price_cents > 0) van en la migracion.'
+}
+
+Table order_status_history {
+  id                 uuid         [pk, default: `gen_random_uuid()`]
+  order_id           uuid         [not null, ref: > orders.id]
+  status             order_status [not null]
+  changed_by_user_id uuid         [null, ref: > users.id]
+  note               varchar(255) [null]
+  created_at         timestamptz  [not null, default: `clock_timestamp()`]
+
+  indexes {
+    (order_id, created_at)
+  }
+  Note: 'Log append-only. NO se guarda el estado anterior: es el status de la fila previa ordenada por created_at, o sea derivable, y guardarlo permitiria que las dos copias se contradigan. clock_timestamp() y no now(): now() devuelve el inicio de la transaccion, asi que dos filas escritas en la misma transaccion quedarian con timestamp identico y sin desempate. changed_by_user_id es NULL cuando el webhook de Stripe mueve PENDING->PAID: ese NULL distingue un cambio automatico de uno manual. note registra el faltante de R8. NO lleva UNIQUE(order_id, status): un Payment Link emite checkout.session.completed Y payment_intent.succeeded para la misma compra, sin orden garantizado, y si ambos handlers marcan PAID el unique abortaria la transaccion, dejaria processed_at en NULL y produciria el bucle de reintentos. El log debe registrar la anomalia, no abortar la transaccion que audita; la deteccion va como alerta de monitoreo (GROUP BY order_id, status HAVING count(*) > 1). Escritura sujeta a R2.'
+}
+
+Table payments {
+  id                  uuid           [pk, default: `gen_random_uuid()`]
+  order_id            uuid           [not null, ref: > orders.id]
+  method              payment_method [not null]
+  stripe_reference_id varchar(255)   [unique, not null]
+  amount_cents        int            [not null]
+  currency            char(3)        [not null, default: 'USD']
+  status              payment_status [not null, default: 'PENDING']
+  paid_at             timestamptz    [null]
+  refunded_at         timestamptz    [null]
+  created_at          timestamptz    [not null, default: `now()`]
+  updated_at          timestamptz    [not null, default: `now()`]
+
+  indexes {
+    (order_id)
+  }
+  Note: 'Varias filas por orden a proposito: un intento fallido y su reintento conviven, por eso el indice de order_id NO es unico. Pero a lo sumo una puede tener exito, y eso lo garantiza un indice unico parcial que va en la migracion: CREATE UNIQUE INDEX ON payments (order_id) WHERE status = SUCCEEDED. Sin el, dos filas exitosas significan doble cobro silencioso y la feature 9 no sabe que metodo mostrar. El reembolso es refunded_at y NO un valor del enum: con REFUNDED el pago saldria del indice parcial (liberando el slot y permitiendo un segundo SUCCEEDED), la feature 9 perderia el metodo de pago de esa orden, y ademas seria falso, porque el pago SI tuvo exito y el reembolso es un hecho posterior. Es el mismo patron de paid_at, used_at, revoked_at, processed_at y deleted_at. Una sola columna de referencia segun method: dos dejarian una siempre en NULL. La fila nace despues de llamar a Stripe para PAYMENT_INTENT, pero para PAYMENT_LINK nace en el webhook, porque al generar el link todavia no existe ni session ni payment intent. FEATURE 7A: se implementa como link efimero por orden (cliente autenticado, orden PENDING creada antes, order_id en metadata); se descarto el link publico reusable porque impide validar stock antes de cobrar y un comprador anonimo rompe las features 5 y 9 y las abilities de CASL sobre recursos propios. CHECK (amount_cents > 0) va en la migracion.'
+}
+
+Table stripe_events {
+  id              uuid         [pk, default: `gen_random_uuid()`]
+  stripe_event_id varchar(255) [unique, not null]
+  type            varchar(100) [not null]
+  payload         jsonb        [not null]
+  processed_at    timestamptz  [null]
+  created_at      timestamptz  [not null, default: `now()`]
+
+  Note: 'Log de idempotencia, NO parte del dominio: por eso no tiene FKs. Su unico trabajo es responder si ya vi este event_id. No puede colapsarse en una columna de payments por tres motivos: un pago recibe MUCHOS eventos, Stripe NO garantiza el orden de llegada (una columna que se pisa pierde la idempotencia del evento borrado), y hay eventos que llegan antes de que exista la fila de payments. UNIQUE(stripe_event_id): Stripe reintenta hasta 3 dias y sin esto se descuenta stock dos veces. processed_at nullable implementa R4. payload es un archivo opaco: la 1FN se sostiene sobre el compromiso de NUNCA consultar dentro del JSON para logica de negocio. Sin indice completo de processed_at: en regimen esa columna esta no-nula en casi todas las filas y la unica consulta es traer los pendientes. En la migracion va el parcial: CREATE INDEX ON stripe_events (created_at) WHERE processed_at IS NULL.'
+}
+
+
+// ─────────────────────── PROMO ───────────────────────
+
+Table promo_codes {
+  id                 uuid          [pk, default: `gen_random_uuid()`]
+  code               varchar(40)   [unique, not null]
+  discount_type      discount_type [not null]
+  discount_value     int           [not null]
+  min_purchase_cents int           [null]
+  usage_limit        int           [null]
+  expires_at         timestamptz   [null]
+  is_active          boolean       [not null, default: true]
+  created_at         timestamptz   [not null, default: `now()`]
+  updated_at         timestamptz   [not null, default: `now()`]
+
+  Note: 'discount_value = puntos de porcentaje si PERCENTAGE, centavos si FIXED. Por eso NO lleva sufijo _cents: es la unica columna cuya unidad depende de otro campo, y por eso mismo necesita un CHECK que tambien dependa de ese campo, o un cupon PERCENTAGE con valor 5000 produce un total negativo. Va en la migracion: CHECK ((discount_type = PERCENTAGE AND discount_value BETWEEN 1 AND 100) OR (discount_type = FIXED AND discount_value > 0)). Los tres NULL significan sin limite: sin minimo de compra, sin tope de usos, sin vencimiento. Sin used_count: un contador leido y despues escrito se desincroniza bajo concurrencia; el uso se cuenta segun R5, que necesita el mismo lock por la misma razon.'
+}
+
+Table promo_redemptions {
+  id            uuid        [pk, default: `gen_random_uuid()`]
+  promo_code_id uuid        [not null, ref: > promo_codes.id]
+  order_id      uuid        [unique, not null, ref: - orders.id]
+  created_at    timestamptz [not null, default: `now()`]
+
+  indexes {
+    (promo_code_id)
+  }
+  Note: 'Registro de USO, no de dinero ni de usuario. El monto descontado vive solo en orders.discount_cents. Y NO hay user_id: el conteo de R5 ya hace JOIN con orders para filtrar por status, asi que la columna no ahorraba ningun join, solo agregaba una segunda copia de un dato que la consulta ya tenia en la mano y que podia contradecir a orders.user_id. Volveria a hacer falta solo si apareciera un limite de un uso por cliente, porque un UNIQUE(promo_code_id, user_id) no se puede tender a traves de un join. UNIQUE(order_id): un cupon por orden. El historial arma cupon usado mas monto uniendo esta tabla con orders.'
+}
+
+
+// ─────────────────────── GRUPOS ───────────────────────
+
+TableGroup auth {
+  users
+  refresh_tokens
+  password_reset_tokens
+}
+
+TableGroup catalog {
+  categories
+  products
+  product_categories
+  product_images
+  colors
+  sizes
+  product_variants
+}
+
+TableGroup engagement {
+  product_likes
+  carts
+  cart_items
+}
+
+TableGroup sales {
+  orders
+  order_items
+  order_status_history
+  payments
+  stripe_events
+}
+
+TableGroup promo {
+  promo_codes
+  promo_redemptions
+}
