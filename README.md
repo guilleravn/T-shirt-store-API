@@ -79,7 +79,9 @@ docker-compose.yml # local Postgres container
 | --- | --- |
 | `npm run start:dev` | Start the app in watch mode |
 | `npm run build` | Compile the project |
-| `npm run lint` | Lint and auto-fix |
+| `npm run typecheck` | Type-check without emitting output |
+| `npm run lint` | Lint (check only) |
+| `npm run lint:fix` | Lint and auto-fix |
 | `npm test` | Run unit tests |
 | `npm run test:e2e` | Run end-to-end tests |
 | `npm run docker:up` / `docker:down` | Start/stop the local Postgres container |
