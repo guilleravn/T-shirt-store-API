@@ -6,11 +6,25 @@
 # generated prisma client
 /generated/prisma
 
-# Prisma AI-assistant skill packs (installed by `prisma init`)
-/.claude/skills
+# Prisma AI-assistant skill packs (installed by `prisma init`). Named explicitly, not as a
+# blanket /.claude/skills, so project skills under .claude/skills/ stay tracked.
+/.claude/skills/prisma-cli
+/.claude/skills/prisma-client-api
+/.claude/skills/prisma-compute
+/.claude/skills/prisma-database-setup
+/.claude/skills/prisma-driver-adapter-implementation
+/.claude/skills/prisma-mongodb-upgrade
+/.claude/skills/prisma-postgres
+/.claude/skills/prisma-postgres-setup
+/.claude/skills/prisma-upgrade-v7
 /.agents/skills
 /.windsurf/skills
 /skills-lock.json
+
+# Plan-first ritual (docs/conventions/git-workflow.md): plans live in Claude Code's plan mode,
+# never as committed files. This directory exists so there's a conventional place to jot one
+# down outside interactive plan mode, but nothing under it is ever committed.
+/plans/*.md
 
 # Logs
 logs
