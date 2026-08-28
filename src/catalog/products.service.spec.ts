@@ -161,6 +161,92 @@ describe('ProductsService', () => {
       expect(result.data).toHaveLength(1);
       expect(result.meta.total).toBe(1);
     });
+
+    it('filters by category slug', async () => {
+      prisma.product.count.mockResolvedValue(0);
+      prisma.product.findMany.mockResolvedValue([]);
+
+      await service.list({ category: 'basics', limit: 20, offset: 0 });
+
+      expect(prisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            productCategories: {
+              some: { category: { slug: 'basics' } },
+            },
+          }) as Record<string, unknown>,
+        }),
+      );
+    });
+
+    it('filters by name, case-insensitive', async () => {
+      prisma.product.count.mockResolvedValue(0);
+      prisma.product.findMany.mockResolvedValue([]);
+
+      await service.list({ name: 'tee', limit: 20, offset: 0 });
+
+      expect(prisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            name: { contains: 'tee', mode: 'insensitive' },
+          }) as Record<string, unknown>,
+        }),
+      );
+    });
+
+    it('requires colorId, sizeId and the price range to match the same variant', async () => {
+      prisma.product.count.mockResolvedValue(0);
+      prisma.product.findMany.mockResolvedValue([]);
+
+      await service.list({
+        colorId: color.id,
+        sizeId: size.id,
+        minPriceCents: 1000,
+        maxPriceCents: 3000,
+        limit: 20,
+        offset: 0,
+      });
+
+      expect(prisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            variants: {
+              some: expect.objectContaining({
+                colorId: color.id,
+                sizeId: size.id,
+                priceCents: { gte: 1000, lte: 3000 },
+              }) as Record<string, unknown>,
+            },
+          }) as Record<string, unknown>,
+        }),
+      );
+    });
+
+    it('sorts by name when sort=name', async () => {
+      prisma.product.count.mockResolvedValue(0);
+      prisma.product.findMany.mockResolvedValue([]);
+
+      await service.list({
+        sort: ProductSort.Name,
+        limit: 20,
+        offset: 0,
+      });
+
+      expect(prisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { name: 'asc' } }),
+      );
+    });
+
+    it('defaults to newest-first when no sort is given', async () => {
+      prisma.product.count.mockResolvedValue(0);
+      prisma.product.findMany.mockResolvedValue([]);
+
+      await service.list({ limit: 20, offset: 0 });
+
+      expect(prisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { createdAt: 'desc' } }),
+      );
+    });
   });
 
   describe('detail', () => {
@@ -250,6 +336,43 @@ describe('ProductsService', () => {
         service.create({ name: 'Classic Tee' }),
       ).rejects.toBeInstanceOf(ConflictException);
     });
+
+    it('creates a bare product with no categories or variants', async () => {
+      prisma.product.create.mockResolvedValue({ id: 'prod-1' });
+      prisma.product.findUniqueOrThrow.mockResolvedValue(
+        buildProduct({ productCategories: [], variants: [] }),
+      );
+
+      const result = await service.create({ name: 'Classic Tee' });
+
+      expect(prisma.category.count).not.toHaveBeenCalled();
+      expect(prisma.productCategory.createMany).not.toHaveBeenCalled();
+      expect(prisma.productVariant.createMany).not.toHaveBeenCalled();
+      expect(result.id).toBe('prod-1');
+    });
+
+    it('maps a P2003 FK violation to BadRequestException', async () => {
+      prisma.product.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('fk violation', {
+          code: 'P2003',
+          clientVersion: 'test',
+        }),
+      );
+
+      await expect(
+        service.create({
+          name: 'Classic Tee',
+          variants: [
+            {
+              colorId: 'missing',
+              sizeId: size.id,
+              sku: 'TEE-BLK-M',
+              priceCents: 1500,
+            },
+          ],
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 
   describe('update', () => {
@@ -260,6 +383,30 @@ describe('ProductsService', () => {
       const result = await service.update('prod-1', { name: 'New name' });
 
       expect(result.id).toBe('prod-1');
+    });
+
+    it('only sends the fields that were actually provided', async () => {
+      prisma.product.updateMany.mockResolvedValue({ count: 1 });
+      prisma.product.findFirst.mockResolvedValue(buildProduct());
+
+      await service.update('prod-1', { name: 'New name' });
+
+      expect(prisma.product.updateMany).toHaveBeenCalledWith({
+        where: { id: 'prod-1', deletedAt: null },
+        data: { name: 'New name' },
+      });
+    });
+
+    it('allows clearing the description with null', async () => {
+      prisma.product.updateMany.mockResolvedValue({ count: 1 });
+      prisma.product.findFirst.mockResolvedValue(buildProduct());
+
+      await service.update('prod-1', { description: null });
+
+      expect(prisma.product.updateMany).toHaveBeenCalledWith({
+        where: { id: 'prod-1', deletedAt: null },
+        data: { description: null },
+      });
     });
 
     it('throws NotFoundException when nothing matched', async () => {

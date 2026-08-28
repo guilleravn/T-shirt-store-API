@@ -85,6 +85,47 @@ describe('ProductVariantsService', () => {
         service.list('missing', { limit: 20, offset: 0 }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
+
+    it('filters to low-stock variants when lowStock=true', async () => {
+      prisma.product.findFirst.mockResolvedValue({ id: 'prod-1' });
+      prisma.productVariant.count.mockResolvedValue(0);
+      prisma.productVariant.findMany.mockResolvedValue([]);
+
+      await service.list('prod-1', {
+        lowStock: true,
+        includeInactive: false,
+        limit: 20,
+        offset: 0,
+      });
+
+      expect(prisma.productVariant.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            stock: { lte: 3 },
+          }) as Record<string, unknown>,
+        }),
+      );
+    });
+
+    it('drops the isActive filter when includeInactive=true', async () => {
+      prisma.product.findFirst.mockResolvedValue({ id: 'prod-1' });
+      prisma.productVariant.count.mockResolvedValue(0);
+      prisma.productVariant.findMany.mockResolvedValue([]);
+
+      await service.list('prod-1', {
+        includeInactive: true,
+        limit: 20,
+        offset: 0,
+      });
+
+      expect(prisma.productVariant.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.not.objectContaining({
+            isActive: true,
+          }) as Record<string, unknown>,
+        }),
+      );
+    });
   });
 
   describe('create', () => {
@@ -174,6 +215,19 @@ describe('ProductVariantsService', () => {
       await expect(
         service.update('prod-1', 'missing', { priceCents: 1800 }),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('maps a P2002 unique violation to ConflictException', async () => {
+      prisma.productVariant.updateMany.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('duplicate', {
+          code: 'P2002',
+          clientVersion: 'test',
+        }),
+      );
+
+      await expect(
+        service.update('prod-1', 'var-1', { sku: 'TAKEN-SKU' }),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
   });
 
