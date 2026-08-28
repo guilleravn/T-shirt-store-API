@@ -22,9 +22,11 @@ architecture write-up the challenge requires.
   canonical; the schema is a partial, in-progress mapping of it, not a substitute for it.
 - `src/` has `AuthModule` (signup/signin/refresh/signout/forgot-password/reset-password/`/me`,
   JWT + Passport, bcrypt for passwords, SHA-256 for token-table lookups) and `EmailModule`
-  (BullMQ-backed, stubbed `EmailService` that logs instead of sending — see
-  `docs/architecture.md`). Every other domain module from `docs/conventions/coding-style.md`'s
-  table (Catalog, Engagement, Sales, Promo) is still unbuilt.
+  (BullMQ-backed; `EmailService` is bound to `BrevoEmailService`, sending real transactional
+  email via `@getbrevo/brevo` — needs `BREVO_API_KEY`/`EMAIL_FROM_ADDRESS` in `.env`, and that
+  sender address verified in the Brevo dashboard, or sends fail). Every other domain module from
+  `docs/conventions/coding-style.md`'s table (Catalog, Engagement, Sales, Promo) is still
+  unbuilt.
 - `openapi.yaml` is the real, current API contract (also published on SwaggerHub). The API is
   served under a global `/v1` prefix (set in `src/main.ts`).
 - `@nestjs/bullmq` (BullMQ on Redis) is installed and wired for the two email jobs above. CASL

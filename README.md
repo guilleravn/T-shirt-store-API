@@ -9,6 +9,8 @@ Backend API built with [NestJS](https://nestjs.com/), [Prisma ORM](https://www.p
 - **PostgreSQL 16 + Redis 7** (via Docker Compose for local development)
 - **JWT auth** (`@nestjs/jwt` + `@nestjs/passport`), bcrypt for passwords
 - **BullMQ** (`@nestjs/bullmq`) for background jobs (currently: password-reset and password-changed emails)
+- **Brevo** (`@getbrevo/brevo`) for transactional email — requires `BREVO_API_KEY` and a verified
+  sender address (`EMAIL_FROM_ADDRESS`) in `.env`, see below
 - Config validation with `@nestjs/config` + `joi`
 - Request validation with `class-validator` / `class-transformer`
 
@@ -25,7 +27,10 @@ Backend API built with [NestJS](https://nestjs.com/), [Prisma ORM](https://www.p
    npm install
    ```
 
-2. Copy the environment file and adjust if needed:
+2. Copy the environment file and fill in the real values — `JWT_SECRET` (any long random
+   string), and `BREVO_API_KEY`/`EMAIL_FROM_ADDRESS` from your own
+   [Brevo](https://www.brevo.com/) account. `EMAIL_FROM_ADDRESS` must be a sender verified in
+   the Brevo dashboard, or every send fails:
 
    ```bash
    cp .env.example .env
@@ -69,7 +74,7 @@ The generated Prisma Client lives in `generated/prisma` (git-ignored) and is imp
 ```
 src/
   auth/            # signup/signin/refresh/signout/forgot-password/reset-password, /me, JWT strategy/guard
-  email/           # BullMQ-backed EmailService (stubbed) + queue producer/processor
+  email/           # BullMQ-backed EmailService (Brevo) + queue producer/processor
   config/          # env validation schema
   prisma/          # PrismaService + PrismaModule (global)
   app.module.ts

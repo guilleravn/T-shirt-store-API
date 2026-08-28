@@ -1,12 +1,26 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { Logger } from '@nestjs/common';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { EMAIL_QUEUE, EmailJobName } from './email.constants';
 import { EmailService } from './email.interface';
 
 @Processor(EMAIL_QUEUE)
 export class EmailProcessor extends WorkerHost {
+  private readonly logger = new Logger(EmailProcessor.name);
+
   constructor(private readonly emailService: EmailService) {
     super();
+  }
+
+  // BullMQ swallows a thrown error into the job's "failed" state silently unless something
+  // listens for it — without this, a bad API key or an unverified sender fails with no visible
+  // trace anywhere.
+  @OnWorkerEvent('failed')
+  onFailed(job: Job, error: Error) {
+    this.logger.error(
+      `Email job ${job.id} (${job.name}) failed: ${error.message}`,
+      error.stack,
+    );
   }
 
   async process(job: Job): Promise<void> {

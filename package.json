@@ -28,6 +28,7 @@
     "prepare": "husky"
   },
   "dependencies": {
+    "@getbrevo/brevo": "^6.0.3",
     "@nestjs/bullmq": "^11.0.5",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.4",
