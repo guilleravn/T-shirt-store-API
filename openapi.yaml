@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: T-Shirt Store API
-  version: "1.0.0"
+  version: '1.0.0'
   description: T-Shirt Store API contract. Money is always integer cents. Dates are ISO 8601 UTC.
 servers:
   # Added by API Auto Mocking Plugin
@@ -53,14 +53,14 @@ paths:
               firstName: Guille
               lastName: Maldonado
       responses:
-        "201":
+        '201':
           description: Account created
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/User" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "429": { $ref: "#/components/responses/TooManyRequests" }
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
 
   /auth/signin:
     post:
@@ -78,14 +78,14 @@ paths:
                 email: { type: string, format: email }
                 password: { type: string }
       responses:
-        "200":
+        '200':
           description: Tokens issued
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AuthTokens" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "429": { $ref: "#/components/responses/TooManyRequests" }
+              schema: { $ref: '#/components/schemas/AuthTokens' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
 
   /auth/refresh:
     post:
@@ -102,13 +102,13 @@ paths:
               properties:
                 refreshToken: { type: string }
       responses:
-        "200":
+        '200':
           description: New token pair
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AuthTokens" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
+              schema: { $ref: '#/components/schemas/AuthTokens' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /auth/signout:
     post:
@@ -124,9 +124,9 @@ paths:
                 refreshToken: { type: string }
                 all: { type: boolean, default: false }
       responses:
-        "204": { description: Session closed }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
+        '204': { description: Session closed }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /auth/forgot-password:
     post:
@@ -143,9 +143,10 @@ paths:
               properties:
                 email: { type: string, format: email }
       responses:
-        "202": { description: "Always accepted, whether the account exists or not" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "429": { $ref: "#/components/responses/TooManyRequests" }
+        '202':
+          { description: 'Always accepted, whether the account exists or not' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
 
   /auth/reset-password:
     post:
@@ -163,21 +164,21 @@ paths:
                 token: { type: string }
                 newPassword: { type: string, minLength: 10, maxLength: 72 }
       responses:
-        "204": { description: Password updated }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "429": { $ref: "#/components/responses/TooManyRequests" }
+        '204': { description: Password updated }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
 
   /me:
     get:
       tags: [Auth]
       summary: Current authenticated user
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/User" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /users:
     get:
@@ -188,10 +189,10 @@ paths:
           in: query
           required: true
           schema: { type: string, enum: [DELIVERY] }
-        - { $ref: "#/components/parameters/Limit" }
-        - { $ref: "#/components/parameters/Offset" }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
@@ -200,11 +201,11 @@ paths:
                 properties:
                   data:
                     type: array
-                    items: { $ref: "#/components/schemas/UserBrief" }
-                  meta: { $ref: "#/components/schemas/PageMeta" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
+                    items: { $ref: '#/components/schemas/UserBrief' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   # ───────── CATALOG REFERENCE (read-only) ─────────
   # Categories, colors and sizes are seeded, not created through the API.
@@ -215,13 +216,13 @@ paths:
       summary: List categories
       security: []
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/Category" }
+                items: { $ref: '#/components/schemas/Category' }
 
   /colors:
     get:
@@ -229,13 +230,13 @@ paths:
       summary: List available colors
       security: []
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/Color" }
+                items: { $ref: '#/components/schemas/Color' }
 
   /sizes:
     get:
@@ -243,13 +244,13 @@ paths:
       summary: List available sizes, ordered by position
       security: []
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/Size" }
+                items: { $ref: '#/components/schemas/Size' }
 
   # ───────── PRODUCTS (read) ─────────
   /products:
@@ -259,17 +260,34 @@ paths:
       security: []
       parameters:
         - { name: category, in: query, schema: { type: string } }
-        - { name: q, in: query, schema: { type: string } }
+        - { name: name, in: query, schema: { type: string } }
         - { name: colorId, in: query, schema: { type: string, format: uuid } }
         - { name: sizeId, in: query, schema: { type: string, format: uuid } }
-        - { name: minPriceCents, in: query, schema: { type: integer, minimum: 0 } }
-        - { name: maxPriceCents, in: query, schema: { type: integer, minimum: 0 } }
-        - { name: includeInactive, in: query, schema: { type: boolean, default: false }, description: "MANAGER only" }
-        - { name: sort, in: query, schema: { type: string, enum: [newest, priceAsc, priceDesc, name] } }
-        - { $ref: "#/components/parameters/Limit" }
-        - { $ref: "#/components/parameters/Offset" }
+        - {
+            name: minPriceCents,
+            in: query,
+            schema: { type: integer, minimum: 0 },
+          }
+        - {
+            name: maxPriceCents,
+            in: query,
+            schema: { type: integer, minimum: 0 },
+          }
+        - {
+            name: includeInactive,
+            in: query,
+            schema: { type: boolean, default: false },
+            description: 'MANAGER only',
+          }
+        - {
+            name: sort,
+            in: query,
+            schema: { type: string, enum: [newest, priceAsc, priceDesc, name] },
+          }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
@@ -278,31 +296,32 @@ paths:
                 properties:
                   data:
                     type: array
-                    items: { $ref: "#/components/schemas/ProductCard" }
-                  meta: { $ref: "#/components/schemas/PageMeta" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401":
-          description: "includeInactive=true with no token"
+                    items: { $ref: '#/components/schemas/ProductCard' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401':
+          description: 'includeInactive=true with no token'
           content:
-            application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } }
-        "403":
+            application/problem+json:
+              { schema: { $ref: '#/components/schemas/Problem' } }
+        '403':
           description: "includeInactive=true with a role that isn't MANAGER"
-          $ref: "#/components/responses/Forbidden"
+          $ref: '#/components/responses/Forbidden'
 
   /products/{productId}:
     parameters:
-      - { $ref: "#/components/parameters/ProductId" }
+      - { $ref: '#/components/parameters/ProductId' }
     get:
       tags: [Products]
       summary: Product detail
       security: []
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ProductDetail" }
-        "404": { $ref: "#/components/responses/NotFound" }
+              schema: { $ref: '#/components/schemas/ProductDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
     patch:
       tags: [Products]
       summary: Edit name/description (MANAGER)
@@ -315,31 +334,43 @@ paths:
                 name: { type: string, minLength: 1, maxLength: 160 }
                 description: { type: string, maxLength: 5000, nullable: true }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ProductDetail" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
+              schema: { $ref: '#/components/schemas/ProductDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
     delete:
       tags: [Products]
       summary: Soft delete (MANAGER)
       responses:
-        "204": { description: Deleted }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
-  /products/{productId}/disable:
-    parameters: [{ $ref: "#/components/parameters/ProductId" }]
-    post:
+  /products/{productId}/active:
+    parameters: [{ $ref: '#/components/parameters/ProductId' }]
+    patch:
       tags: [Products]
-      summary: Disable product (MANAGER)
+      summary: Enable or disable the product (MANAGER)
+      description: >-
+        Toggles is_active, not deleted_at — the product stays visible to MANAGER either way.
+        See DELETE /products/{productId} for the separate, everyone-invisible soft delete.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [isActive]
+              properties:
+                isActive: { type: boolean }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
@@ -347,33 +378,15 @@ paths:
                 type: object
                 properties:
                   id: { type: string, format: uuid }
-                  isActive: { type: boolean, example: false }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-
-  /products/{productId}/enable:
-    parameters: [{ $ref: "#/components/parameters/ProductId" }]
-    post:
-      tags: [Products]
-      summary: Enable product (MANAGER)
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  id: { type: string, format: uuid }
-                  isActive: { type: boolean, example: true }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
+                  isActive: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /products/{productId}/categories:
-    parameters: [{ $ref: "#/components/parameters/ProductId" }]
+    parameters: [{ $ref: '#/components/parameters/ProductId' }]
     put:
       tags: [Products]
       summary: Replace the product's categories (MANAGER)
@@ -390,7 +403,7 @@ paths:
                   maxItems: 10
                   items: { type: string, format: uuid }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
@@ -399,14 +412,14 @@ paths:
                 properties:
                   categories:
                     type: array
-                    items: { $ref: "#/components/schemas/Category" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
+                    items: { $ref: '#/components/schemas/Category' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /products/{productId}/images:
-    parameters: [{ $ref: "#/components/parameters/ProductId" }]
+    parameters: [{ $ref: '#/components/parameters/ProductId' }]
     post:
       tags: [Products]
       summary: Upload an image (MANAGER)
@@ -421,23 +434,23 @@ paths:
                 file: { type: string, format: binary }
                 altText: { type: string, maxLength: 200 }
       responses:
-        "201":
+        '201':
           description: Created
           headers:
             Location: { schema: { type: string } }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ProductImage" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "413": { $ref: "#/components/responses/PayloadTooLarge" }
-        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
-        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+              schema: { $ref: '#/components/schemas/ProductImage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /products/{productId}/images/order:
-    parameters: [{ $ref: "#/components/parameters/ProductId" }]
+    parameters: [{ $ref: '#/components/parameters/ProductId' }]
     put:
       tags: [Products]
       summary: Reorder the gallery (MANAGER)
@@ -453,7 +466,7 @@ paths:
                   type: array
                   items: { type: string, format: uuid }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
@@ -462,16 +475,21 @@ paths:
                 properties:
                   images:
                     type: array
-                    items: { $ref: "#/components/schemas/ProductImage" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
+                    items: { $ref: '#/components/schemas/ProductImage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /products/{productId}/images/{imageId}:
     parameters:
-      - { $ref: "#/components/parameters/ProductId" }
-      - { name: imageId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { $ref: '#/components/parameters/ProductId' }
+      - {
+          name: imageId,
+          in: path,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
     patch:
       tags: [Products]
       summary: Edit alt text (MANAGER)
@@ -483,37 +501,40 @@ paths:
               properties:
                 altText: { type: string, maxLength: 200 }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ProductImage" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
+              schema: { $ref: '#/components/schemas/ProductImage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
     delete:
       tags: [Products]
       summary: Delete image (MANAGER)
       responses:
-        "204": { description: Deleted }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   # ───────── VARIANTS ─────────
+  # All variant endpoints are nested under their product — never a flat /variants/{variantId} —
+  # so the same two-level pattern (product + sub-resource) applies everywhere in this file,
+  # including three levels deep (product + variant + stock), same as /products/{id}/images/{id}.
   /products/{productId}/variants:
-    parameters: [{ $ref: "#/components/parameters/ProductId" }]
+    parameters: [{ $ref: '#/components/parameters/ProductId' }]
     get:
       tags: [Variants]
       summary: Variants with real stock (MANAGER)
       parameters:
         - { name: includeInactive, in: query, schema: { type: boolean } }
         - { name: lowStock, in: query, schema: { type: boolean } }
-        - { $ref: "#/components/parameters/Limit" }
-        - { $ref: "#/components/parameters/Offset" }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
@@ -522,11 +543,11 @@ paths:
                 properties:
                   data:
                     type: array
-                    items: { $ref: "#/components/schemas/Variant" }
-                  meta: { $ref: "#/components/schemas/PageMeta" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
+                    items: { $ref: '#/components/schemas/Variant' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
     post:
       tags: [Variants]
       summary: Create a variant (MANAGER)
@@ -534,22 +555,24 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/CreateVariantDto" }
+            schema: { $ref: '#/components/schemas/CreateVariantDto' }
       responses:
-        "201":
+        '201':
           description: Created
           headers: { Location: { schema: { type: string } } }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Variant" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
+              schema: { $ref: '#/components/schemas/Variant' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
-  /variants/{variantId}:
-    parameters: [{ $ref: "#/components/parameters/VariantId" }]
+  /products/{productId}/variants/{variantId}:
+    parameters:
+      - { $ref: '#/components/parameters/ProductId' }
+      - { $ref: '#/components/parameters/VariantId' }
     patch:
       tags: [Variants]
       summary: Edit price/SKU (MANAGER)
@@ -562,28 +585,68 @@ paths:
                 sku: { type: string, minLength: 1, maxLength: 64 }
                 priceCents: { type: integer, minimum: 1 }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Variant" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
+              schema: { $ref: '#/components/schemas/Variant' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
     delete:
       tags: [Variants]
-      summary: Delete variant (only if it was never sold) (MANAGER)
+      summary: Soft delete variant (MANAGER)
+      description: >-
+        Always succeeds, even if the variant was sold — unlike products, there is no separate
+        FK-based restriction, because order_items already freezes product name, variant label
+        and price independent of this row. Mirrors DELETE /products/{productId}.
       responses:
-        "204": { description: Deleted }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
-  /variants/{variantId}/stock:
-    parameters: [{ $ref: "#/components/parameters/VariantId" }]
+  /products/{productId}/variants/{variantId}/active:
+    parameters:
+      - { $ref: '#/components/parameters/ProductId' }
+      - { $ref: '#/components/parameters/VariantId' }
+    patch:
+      tags: [Variants]
+      summary: Enable or disable the variant (MANAGER)
+      description: >-
+        Toggles is_active, not deleted_at — same distinction as
+        PATCH /products/{productId}/active.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [isActive]
+              properties:
+                isActive: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  isActive: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /products/{productId}/variants/{variantId}/stock:
+    parameters:
+      - { $ref: '#/components/parameters/ProductId' }
+      - { $ref: '#/components/parameters/VariantId' }
     post:
       tags: [Variants]
       summary: Manually adjust stock, by delta (MANAGER)
@@ -601,7 +664,7 @@ paths:
                   description: "Positive adds stock, negative subtracts it. Can't be 0. Use for restocking or fixing a count — a sale reduces stock on its own, see /webhooks/stripe."
                   example: -3
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
@@ -612,59 +675,20 @@ paths:
                   previousStock: { type: integer }
                   stock: { type: integer }
                   crossedLowStockThreshold: { type: boolean }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
-
-  /variants/{variantId}/disable:
-    parameters: [{ $ref: "#/components/parameters/VariantId" }]
-    post:
-      tags: [Variants]
-      summary: Disable variant (MANAGER)
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  id: { type: string, format: uuid }
-                  isActive: { type: boolean, example: false }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
-
-  /variants/{variantId}/enable:
-    parameters: [{ $ref: "#/components/parameters/VariantId" }]
-    post:
-      tags: [Variants]
-      summary: Enable variant (MANAGER)
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  id: { type: string, format: uuid }
-                  isActive: { type: boolean, example: true }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   # ───────── CART / LIKES ─────────
   /products/{productId}/like:
-    parameters: [{ $ref: "#/components/parameters/ProductId" }]
+    parameters: [{ $ref: '#/components/parameters/ProductId' }]
     put:
       tags: [Likes]
       summary: Like a product (idempotent, CLIENT)
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
@@ -674,13 +698,13 @@ paths:
                   productId: { type: string, format: uuid }
                   liked: { type: boolean }
                   likesCount: { type: integer }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
     delete:
       tags: [Likes]
       summary: Unlike (CLIENT, idempotent)
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
@@ -690,20 +714,20 @@ paths:
                   productId: { type: string, format: uuid }
                   liked: { type: boolean, example: false }
                   likesCount: { type: integer }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /me/cart:
     get:
       tags: [Cart]
       summary: View my cart (CLIENT)
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Cart" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
+              schema: { $ref: '#/components/schemas/Cart' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /me/cart/items:
     post:
@@ -720,25 +744,30 @@ paths:
                 productVariantId: { type: string, format: uuid }
                 quantity: { type: integer, minimum: 1, maximum: 99 }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Cart" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
+              schema: { $ref: '#/components/schemas/Cart' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
     delete:
       tags: [Cart]
       summary: Empty the cart (CLIENT)
       responses:
-        "204": { description: Emptied }
-        "401": { $ref: "#/components/responses/Unauthorized" }
+        '204': { description: Emptied }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /me/cart/items/{itemId}:
     parameters:
-      - { name: itemId, in: path, required: true, schema: { type: string, format: uuid } }
+      - {
+          name: itemId,
+          in: path,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
     patch:
       tags: [Cart]
       summary: Set the quantity of a line (CLIENT)
@@ -752,22 +781,22 @@ paths:
               properties:
                 quantity: { type: integer, minimum: 1, maximum: 99 }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Cart" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
+              schema: { $ref: '#/components/schemas/Cart' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
     delete:
       tags: [Cart]
       summary: Remove a line (CLIENT)
       responses:
-        "204": { description: Removed }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
+        '204': { description: Removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   # ───────── CHECKOUT / WEBHOOKS ─────────
   /checkout/payment-link:
@@ -775,7 +804,7 @@ paths:
       tags: [Checkout]
       summary: Direct purchase of a single variant, no cart (CLIENT)
       parameters:
-        - { $ref: "#/components/parameters/IdempotencyKey" }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
@@ -790,7 +819,7 @@ paths:
                 successUrl: { type: string, format: uri }
                 cancelUrl: { type: string, format: uri }
       responses:
-        "201":
+        '201':
           description: Link generated. Stock is only reduced once Stripe confirms the payment (see /webhooks/stripe).
           content:
             application/json:
@@ -802,29 +831,30 @@ paths:
                   expiresAt: { type: string, format: date-time }
                   totalCents: { type: integer }
                   currency: { type: string }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "429": { $ref: "#/components/responses/TooManyRequests" }
-        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /checkout/payment-intent:
     post:
       tags: [Checkout]
-      summary: Checkout the full cart (CLIENT)
+      summary: Create a Stripe PaymentIntent for an order created via POST /orders (CLIENT)
       parameters:
-        - { $ref: "#/components/parameters/IdempotencyKey" }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               type: object
+              required: [orderId]
               properties:
-                promoCode: { type: string }
-                expectedTotalCents: { type: integer }
+                orderId: { type: string, format: uuid }
       responses:
-        "201":
+        '201':
           description: Payment intent created. Stock is only reduced once Stripe confirms the payment (see /webhooks/stripe).
           content:
             application/json:
@@ -833,15 +863,13 @@ paths:
                 properties:
                   orderId: { type: string, format: uuid }
                   clientSecret: { type: string }
-                  subtotalCents: { type: integer }
-                  discountCents: { type: integer }
-                  totalCents: { type: integer }
-                  currency: { type: string }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "429": { $ref: "#/components/responses/TooManyRequests" }
-        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /webhooks/stripe:
     post:
@@ -857,8 +885,8 @@ paths:
           application/json:
             schema: { type: object }
       responses:
-        "200": { description: Processed (or already seen before) }
-        "400": { description: Invalid signature }
+        '200': { description: Processed (or already seen before) }
+        '400': { description: Invalid signature }
 
   # ───────── ORDERS ─────────
   /orders:
@@ -870,15 +898,37 @@ paths:
         - { name: to, in: query, schema: { type: string, format: date-time } }
         - name: status
           in: query
-          schema: { type: string, enum: [PENDING, PAID, PROCESSING, SHIPPED, DELIVERED, CANCELLED] }
-        - { name: minTotalCents, in: query, schema: { type: integer, minimum: 0 } }
-        - { name: maxTotalCents, in: query, schema: { type: integer, minimum: 0 } }
-        - { name: userId, in: query, schema: { type: string, format: uuid }, description: "MANAGER only" }
-        - { name: deliveryPersonId, in: query, schema: { type: string, format: uuid }, description: "MANAGER only" }
-        - { $ref: "#/components/parameters/Limit" }
-        - { $ref: "#/components/parameters/Offset" }
+          schema:
+            {
+              type: string,
+              enum: [PENDING, PAID, PROCESSING, SHIPPED, DELIVERED, CANCELLED],
+            }
+        - {
+            name: minTotalCents,
+            in: query,
+            schema: { type: integer, minimum: 0 },
+          }
+        - {
+            name: maxTotalCents,
+            in: query,
+            schema: { type: integer, minimum: 0 },
+          }
+        - {
+            name: userId,
+            in: query,
+            schema: { type: string, format: uuid },
+            description: 'MANAGER only',
+          }
+        - {
+            name: deliveryPersonId,
+            in: query,
+            schema: { type: string, format: uuid },
+            description: 'MANAGER only',
+          }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
@@ -887,29 +937,59 @@ paths:
                 properties:
                   data:
                     type: array
-                    items: { $ref: "#/components/schemas/OrderSummary" }
-                  meta: { $ref: "#/components/schemas/PageMeta" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
+                    items: { $ref: '#/components/schemas/OrderSummary' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Orders]
+      summary: Create a PENDING order from the current cart (CLIENT)
+      description: >-
+        Freezes the cart's current items into the order (price, product name, variant label)
+        and applies promoCode if given. The cart itself is not cleared until payment is
+        confirmed (see /webhooks/stripe) — creating an order does not consume the cart. A user
+        may have at most one non-terminal order (PENDING, with no successful payment) at a
+        time; pay or cancel it before creating another.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                promoCode: { type: string }
+      responses:
+        '201':
+          description: Order created from the cart's current contents.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
 
   /orders/{orderId}:
-    parameters: [{ $ref: "#/components/parameters/OrderId" }]
+    parameters: [{ $ref: '#/components/parameters/OrderId' }]
     get:
       tags: [Orders]
       summary: Order detail. Only the owner (CLIENT), MANAGER, or the assigned delivery person.
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/OrderDetail" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
+              schema: { $ref: '#/components/schemas/OrderDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /orders/{orderId}/status:
-    parameters: [{ $ref: "#/components/parameters/OrderId" }]
+    parameters: [{ $ref: '#/components/parameters/OrderId' }]
     patch:
       tags: [Orders]
       summary: Advance the status (MANAGER does PAID→PROCESSING→SHIPPED, DELIVERY does SHIPPED→DELIVERED)
@@ -922,26 +1002,31 @@ paths:
               required: [status]
               properties:
                 status: { type: string, enum: [PROCESSING, SHIPPED, DELIVERED] }
-                deliveryPersonId: { type: string, format: uuid, description: "Required when status=SHIPPED" }
+                deliveryPersonId:
+                  {
+                    type: string,
+                    format: uuid,
+                    description: 'Required when status=SHIPPED',
+                  }
                 note: { type: string, maxLength: 255 }
               if:
                 properties: { status: { const: SHIPPED } }
               then:
                 required: [status, deliveryPersonId]
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/OrderDetail" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
+              schema: { $ref: '#/components/schemas/OrderDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /orders/{orderId}/cancel:
-    parameters: [{ $ref: "#/components/parameters/OrderId" }]
+    parameters: [{ $ref: '#/components/parameters/OrderId' }]
     post:
       tags: [Orders]
       summary: Cancel an order before it's SHIPPED (owning CLIENT or MANAGER)
@@ -953,15 +1038,15 @@ paths:
               properties:
                 reason: { type: string }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/OrderDetail" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
+              schema: { $ref: '#/components/schemas/OrderDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   # ───────── PROMO CODES ─────────
   /promo-codes:
@@ -970,10 +1055,10 @@ paths:
       summary: List promo codes, filterable by code (MANAGER)
       parameters:
         - { name: code, in: query, schema: { type: string } }
-        - { $ref: "#/components/parameters/Limit" }
-        - { $ref: "#/components/parameters/Offset" }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
@@ -982,10 +1067,10 @@ paths:
                 properties:
                   data:
                     type: array
-                    items: { $ref: "#/components/schemas/PromoCode" }
-                  meta: { $ref: "#/components/schemas/PageMeta" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
+                    items: { $ref: '#/components/schemas/PromoCode' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [PromoCodes]
       summary: Create a promo code (MANAGER)
@@ -993,21 +1078,26 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/CreatePromoCodeDto" }
+            schema: { $ref: '#/components/schemas/CreatePromoCodeDto' }
       responses:
-        "201":
+        '201':
           description: Created
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/PromoCode" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "409": { $ref: "#/components/responses/Conflict" }
+              schema: { $ref: '#/components/schemas/PromoCode' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /promo-codes/{promoCodeId}:
     parameters:
-      - { name: promoCodeId, in: path, required: true, schema: { type: string, format: uuid } }
+      - {
+          name: promoCodeId,
+          in: path,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
     patch:
       tags: [PromoCodes]
       summary: Edit limits/expiration (MANAGER)
@@ -1022,24 +1112,29 @@ paths:
                 usageLimit: { type: integer, minimum: 1, nullable: true }
                 expiresAt: { type: string, format: date-time, nullable: true }
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/PromoCode" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
+              schema: { $ref: '#/components/schemas/PromoCode' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /promo-codes/{promoCodeId}/disable:
     parameters:
-      - { name: promoCodeId, in: path, required: true, schema: { type: string, format: uuid } }
+      - {
+          name: promoCodeId,
+          in: path,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
     post:
       tags: [PromoCodes]
       summary: Disable a promo code (MANAGER)
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
@@ -1047,19 +1142,29 @@ paths:
                 type: object
                 properties:
                   id: { type: string, format: uuid }
-                  status: { type: string, enum: [ACTIVE, DISABLED, EXPIRED, EXHAUSTED], example: DISABLED }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
+                  status:
+                    {
+                      type: string,
+                      enum: [ACTIVE, DISABLED, EXPIRED, EXHAUSTED],
+                      example: DISABLED,
+                    }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /promo-codes/{promoCodeId}/enable:
     parameters:
-      - { name: promoCodeId, in: path, required: true, schema: { type: string, format: uuid } }
+      - {
+          name: promoCodeId,
+          in: path,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
     post:
       tags: [PromoCodes]
       summary: Re-enable a promo code (MANAGER)
       responses:
-        "200":
+        '200':
           description: OK
           content:
             application/json:
@@ -1067,10 +1172,15 @@ paths:
                 type: object
                 properties:
                   id: { type: string, format: uuid }
-                  status: { type: string, enum: [ACTIVE, DISABLED, EXPIRED, EXHAUSTED], example: ACTIVE }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
+                  status:
+                    {
+                      type: string,
+                      enum: [ACTIVE, DISABLED, EXPIRED, EXHAUSTED],
+                      example: ACTIVE,
+                    }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /promo-codes/validate:
     post:
@@ -1088,7 +1198,7 @@ paths:
                 productVariantId: { type: string, format: uuid }
                 quantity: { type: integer, minimum: 1 }
       responses:
-        "200":
+        '200':
           description: Validation result (always 200, valid or not)
           content:
             application/json:
@@ -1100,14 +1210,21 @@ paths:
                   reason:
                     type: string
                     nullable: true
-                    enum: [NOT_FOUND, DISABLED, EXPIRED, USAGE_LIMIT_REACHED, MIN_PURCHASE_NOT_MET]
+                    enum:
+                      [
+                        NOT_FOUND,
+                        DISABLED,
+                        EXPIRED,
+                        USAGE_LIMIT_REACHED,
+                        MIN_PURCHASE_NOT_MET,
+                      ]
                   discountType: { type: string, enum: [PERCENTAGE, FIXED] }
                   discountCents: { type: integer }
                   subtotalCents: { type: integer }
                   totalCents: { type: integer }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "429": { $ref: "#/components/responses/TooManyRequests" }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
 
 components:
   securitySchemes:
@@ -1144,7 +1261,7 @@ components:
       name: Idempotency-Key
       in: header
       required: false
-      description: "Prevents creating a duplicate order if the request is repeated (double click, network retry)"
+      description: 'Prevents duplicate creation if the request is repeated (double click, network retry)'
       schema: { type: string, maxLength: 128 }
 
   responses:
@@ -1152,111 +1269,111 @@ components:
       description: Invalid data
       content:
         application/problem+json:
-          schema: { $ref: "#/components/schemas/Problem" }
+          schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: "https://api.tshirtstore.com/errors/validation"
-            title: "Validation failed"
+            type: 'https://api.tshirtstore.com/errors/validation'
+            title: 'Validation failed'
             status: 400
-            detail: "One or more fields are invalid"
-            code: "VALIDATION_ERROR"
-            requestId: "01J9Z0000000000000000001"
-            errors: [{ field: "field", message: "reason for the error" }]
+            detail: 'One or more fields are invalid'
+            code: 'VALIDATION_ERROR'
+            requestId: '01J9Z0000000000000000001'
+            errors: [{ field: 'field', message: 'reason for the error' }]
     Unauthorized:
       description: No valid credential
       content:
         application/problem+json:
-          schema: { $ref: "#/components/schemas/Problem" }
+          schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: "https://api.tshirtstore.com/errors/unauthorized"
-            title: "Unauthorized"
+            type: 'https://api.tshirtstore.com/errors/unauthorized'
+            title: 'Unauthorized'
             status: 401
-            detail: "The request could not be authenticated"
-            code: "UNAUTHORIZED"
-            requestId: "01J9Z0000000000000000002"
+            detail: 'The request could not be authenticated'
+            code: 'UNAUTHORIZED'
+            requestId: '01J9Z0000000000000000002'
     Forbidden:
       description: Role has no permission on this resource
       content:
         application/problem+json:
-          schema: { $ref: "#/components/schemas/Problem" }
+          schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: "https://api.tshirtstore.com/errors/forbidden"
-            title: "Forbidden"
+            type: 'https://api.tshirtstore.com/errors/forbidden'
+            title: 'Forbidden'
             status: 403
             detail: "You don't have permission for this action"
-            code: "FORBIDDEN"
-            requestId: "01J9Z0000000000000000003"
+            code: 'FORBIDDEN'
+            requestId: '01J9Z0000000000000000003'
     NotFound:
       description: Doesn't exist, or isn't visible to whoever is asking
       content:
         application/problem+json:
-          schema: { $ref: "#/components/schemas/Problem" }
+          schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: "https://api.tshirtstore.com/errors/not-found"
-            title: "Not Found"
+            type: 'https://api.tshirtstore.com/errors/not-found'
+            title: 'Not Found'
             status: 404
             detail: "The resource doesn't exist"
-            code: "NOT_FOUND"
-            requestId: "01J9Z0000000000000000004"
+            code: 'NOT_FOUND'
+            requestId: '01J9Z0000000000000000004'
     Conflict:
       description: The current state doesn't allow this operation
       content:
         application/problem+json:
-          schema: { $ref: "#/components/schemas/Problem" }
+          schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: "https://api.tshirtstore.com/errors/conflict"
-            title: "Conflict"
+            type: 'https://api.tshirtstore.com/errors/conflict'
+            title: 'Conflict'
             status: 409
             detail: "This operation isn't valid right now"
-            code: "CONFLICT"
-            requestId: "01J9Z0000000000000000005"
+            code: 'CONFLICT'
+            requestId: '01J9Z0000000000000000005'
     TooManyRequests:
       description: Rate limit exceeded
       content:
         application/problem+json:
-          schema: { $ref: "#/components/schemas/Problem" }
+          schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: "https://api.tshirtstore.com/errors/rate-limited"
-            title: "Too Many Requests"
+            type: 'https://api.tshirtstore.com/errors/rate-limited'
+            title: 'Too Many Requests'
             status: 429
-            detail: "Too many attempts, please wait a moment"
-            code: "RATE_LIMITED"
-            requestId: "01J9Z0000000000000000006"
+            detail: 'Too many attempts, please wait a moment'
+            code: 'RATE_LIMITED'
+            requestId: '01J9Z0000000000000000006'
     PayloadTooLarge:
       description: File too large
       content:
         application/problem+json:
-          schema: { $ref: "#/components/schemas/Problem" }
+          schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: "https://api.tshirtstore.com/errors/payload-too-large"
-            title: "Payload Too Large"
+            type: 'https://api.tshirtstore.com/errors/payload-too-large'
+            title: 'Payload Too Large'
             status: 413
-            detail: "The file exceeds the maximum size"
-            code: "FILE_TOO_LARGE"
-            requestId: "01J9Z0000000000000000007"
+            detail: 'The file exceeds the maximum size'
+            code: 'FILE_TOO_LARGE'
+            requestId: '01J9Z0000000000000000007'
     UnsupportedMediaType:
       description: Unsupported file type
       content:
         application/problem+json:
-          schema: { $ref: "#/components/schemas/Problem" }
+          schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: "https://api.tshirtstore.com/errors/unsupported-media-type"
-            title: "Unsupported Media Type"
+            type: 'https://api.tshirtstore.com/errors/unsupported-media-type'
+            title: 'Unsupported Media Type'
             status: 415
             detail: "This file type isn't allowed"
-            code: "UNSUPPORTED_MEDIA_TYPE"
-            requestId: "01J9Z0000000000000000008"
+            code: 'UNSUPPORTED_MEDIA_TYPE'
+            requestId: '01J9Z0000000000000000008'
     ServiceUnavailable:
       description: An external dependency is down
       content:
         application/problem+json:
-          schema: { $ref: "#/components/schemas/Problem" }
+          schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: "https://api.tshirtstore.com/errors/service-unavailable"
-            title: "Service Unavailable"
+            type: 'https://api.tshirtstore.com/errors/service-unavailable'
+            title: 'Service Unavailable'
             status: 503
             detail: "The service isn't responding, please try again in a few minutes"
-            code: "SERVICE_UNAVAILABLE"
-            requestId: "01J9Z0000000000000000009"
+            code: 'SERVICE_UNAVAILABLE'
+            requestId: '01J9Z0000000000000000009'
 
   schemas:
     Problem:
@@ -1305,7 +1422,7 @@ components:
     AuthTokens:
       type: object
       properties:
-        user: { $ref: "#/components/schemas/User" }
+        user: { $ref: '#/components/schemas/User' }
         accessToken: { type: string }
         refreshToken: { type: string }
         tokenType: { type: string, example: Bearer }
@@ -1316,13 +1433,13 @@ components:
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
-        hexCode: { type: string, example: "#1A1A1A" }
+        hexCode: { type: string, example: '#1A1A1A' }
 
     Size:
       type: object
       properties:
         id: { type: string, format: uuid }
-        name: { type: string, example: "M" }
+        name: { type: string, example: 'M' }
         position: { type: integer }
 
     Category:
@@ -1342,28 +1459,29 @@ components:
 
     Variant:
       type: object
-      description: "Includes real stock. Only visible to MANAGER."
+      description: 'Includes real stock. Only visible to MANAGER.'
       properties:
         id: { type: string, format: uuid }
         sku: { type: string }
-        color: { $ref: "#/components/schemas/Color" }
-        size: { $ref: "#/components/schemas/Size" }
+        color: { $ref: '#/components/schemas/Color' }
+        size: { $ref: '#/components/schemas/Size' }
         priceCents: { type: integer }
         stock: { type: integer }
         isActive: { type: boolean }
 
     PublicVariant:
       type: object
-      description: "For the public catalog and cart. Never exposes the exact stock."
+      description: 'For the public catalog and cart. Never exposes the exact stock.'
       properties:
         id: { type: string, format: uuid }
         sku: { type: string }
-        color: { $ref: "#/components/schemas/Color" }
-        size: { $ref: "#/components/schemas/Size" }
+        color: { $ref: '#/components/schemas/Color' }
+        size: { $ref: '#/components/schemas/Size' }
         priceCents: { type: integer }
         isActive: { type: boolean }
-        availableQuantity: { type: integer, example: 10, description: "min(stock, 10)" }
-        lowStock: { type: boolean, description: "true if stock <= 3" }
+        availableQuantity:
+          { type: integer, example: 10, description: 'min(stock, 10)' }
+        lowStock: { type: boolean, description: 'true if stock <= 3' }
 
     ProductCard:
       type: object
@@ -1375,27 +1493,27 @@ components:
           properties:
             minCents: { type: integer }
             maxCents: { type: integer }
-        primaryImage: { $ref: "#/components/schemas/ProductImage" }
+        primaryImage: { $ref: '#/components/schemas/ProductImage' }
         categories:
           type: array
-          items: { $ref: "#/components/schemas/Category" }
+          items: { $ref: '#/components/schemas/Category' }
         inStock: { type: boolean }
         likesCount: { type: integer }
         likedByMe: { type: boolean }
 
     ProductDetail:
       allOf:
-        - $ref: "#/components/schemas/ProductCard"
+        - $ref: '#/components/schemas/ProductCard'
         - type: object
           properties:
             description: { type: string, nullable: true }
             isActive: { type: boolean }
             images:
               type: array
-              items: { $ref: "#/components/schemas/ProductImage" }
+              items: { $ref: '#/components/schemas/ProductImage' }
             variants:
               type: array
-              items: { $ref: "#/components/schemas/PublicVariant" }
+              items: { $ref: '#/components/schemas/PublicVariant' }
 
     CreateProductDto:
       type: object
@@ -1411,7 +1529,7 @@ components:
         variants:
           type: array
           maxItems: 50
-          items: { $ref: "#/components/schemas/CreateVariantDto" }
+          items: { $ref: '#/components/schemas/CreateVariantDto' }
 
     CreateVariantDto:
       type: object
@@ -1426,17 +1544,27 @@ components:
 
     CartItem:
       type: object
-      description: "Includes real stock, since it belongs to the current user."
+      description: 'Includes real stock, since it belongs to the current user.'
       properties:
         id: { type: string, format: uuid }
-        variant: { $ref: "#/components/schemas/Variant" }
+        variant: { $ref: '#/components/schemas/Variant' }
         quantity: { type: integer }
         lineTotalCents: { type: integer }
         available: { type: boolean }
         maxQuantity: { type: integer }
         issues:
           type: array
-          items: { type: string, enum: [OUT_OF_STOCK, INSUFFICIENT_STOCK, VARIANT_DISABLED, PRODUCT_UNAVAILABLE] }
+          items:
+            {
+              type: string,
+              enum:
+                [
+                  OUT_OF_STOCK,
+                  INSUFFICIENT_STOCK,
+                  VARIANT_DISABLED,
+                  PRODUCT_UNAVAILABLE,
+                ],
+            }
 
     Cart:
       type: object
@@ -1444,7 +1572,7 @@ components:
         id: { type: string, format: uuid }
         items:
           type: array
-          items: { $ref: "#/components/schemas/CartItem" }
+          items: { $ref: '#/components/schemas/CartItem' }
         subtotalCents: { type: integer }
         itemCount: { type: integer }
         hasUnavailableItems: { type: boolean }
@@ -1462,27 +1590,39 @@ components:
       type: object
       properties:
         id: { type: string, format: uuid }
-        status: { type: string, enum: [PENDING, PAID, PROCESSING, SHIPPED, DELIVERED, CANCELLED] }
+        status:
+          {
+            type: string,
+            enum: [PENDING, PAID, PROCESSING, SHIPPED, DELIVERED, CANCELLED],
+          }
         createdAt: { type: string, format: date-time }
         subtotalCents: { type: integer }
         discountCents: { type: integer }
         totalCents: { type: integer }
         currency: { type: string }
         itemCount: { type: integer }
-        paymentMethod: { type: string, enum: [PAYMENT_LINK, PAYMENT_INTENT] }
+        paymentMethod:
+          {
+            type: string,
+            enum: [PAYMENT_LINK, PAYMENT_INTENT],
+            nullable: true,
+            description: 'Null until a payment attempt exists — see POST /orders and POST /checkout/payment-intent',
+          }
         promoCode: { type: string, nullable: true }
         deliveryPersonId: { type: string, format: uuid, nullable: true }
 
     OrderDetail:
       allOf:
-        - $ref: "#/components/schemas/OrderSummary"
+        - $ref: '#/components/schemas/OrderSummary'
         - type: object
           properties:
             items:
               type: array
-              items: { $ref: "#/components/schemas/OrderItemLine" }
+              items: { $ref: '#/components/schemas/OrderItemLine' }
             payment:
               type: object
+              nullable: true
+              description: 'Null until a payment attempt exists — see POST /orders and POST /checkout/payment-intent'
               properties:
                 method: { type: string }
                 status: { type: string }
@@ -1500,7 +1640,7 @@ components:
                     type: string
                     format: uuid
                     nullable: true
-                    description: "NULL if the webhook made the change, not a person"
+                    description: 'NULL if the webhook made the change, not a person'
                   createdAt: { type: string, format: date-time }
             customer:
               type: object
@@ -1539,7 +1679,7 @@ components:
         discountValue:
           type: integer
           minimum: 1
-          description: "1-100 if PERCENTAGE, cents if FIXED"
+          description: '1-100 if PERCENTAGE, cents if FIXED'
         minPurchaseCents: { type: integer, minimum: 0 }
         usageLimit: { type: integer, minimum: 1 }
         expiresAt: { type: string, format: date-time }

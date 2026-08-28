@@ -30,13 +30,13 @@ The DBML is canonical; if it contradicts this file, the DBML wins.
 `prisma/schema.prisma` currently has no models — generator and datasource only (see
 [`CLAUDE.md`](../../CLAUDE.md) for current state). When models are added:
 
-| DBML | Prisma | Note |
-|---|---|---|
-| `snake_case` table/column names | `camelCase` fields, `PascalCase` model names | Use `@map("column_name")` per field and `@@map("table_name")` per model so the DB stays `snake_case` while Prisma stays idiomatic |
-| `Enum order_status { ... }` | `enum OrderStatus { ... }` | Prisma enum values stay UPPERCASE to match the DB and the API (see [`api-contracts.md`](api-contracts.md)) |
-| `email citext` | `String @db.Citext` (`Unsupported("citext")` if the native type isn't available) | Requires `CREATE EXTENSION citext` — already in `T-Shirt-constraints.sql` |
-| `indexes { (product_id, color_id, size_id) [unique] }` | `@@unique([productId, colorId, sizeId])` | Composite uniques and indexes map directly; order of fields matters for which queries the index can serve as a prefix |
-| `indexes { (order_id, created_at) }` | `@@index([orderId, createdAt])` | Same |
+| DBML                                                 | Prisma                                                                           | Note                                                                                                                              |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `snake_case` table/column names                      | `camelCase` fields, `PascalCase` model names                                     | Use `@map("column_name")` per field and `@@map("table_name")` per model so the DB stays `snake_case` while Prisma stays idiomatic |
+| `Enum order_status { ... }`                          | `enum OrderStatus { ... }`                                                       | Prisma enum values stay UPPERCASE to match the DB and the API (see [`api-contracts.md`](api-contracts.md))                        |
+| `email citext`                                       | `String @db.Citext` (`Unsupported("citext")` if the native type isn't available) | Requires `CREATE EXTENSION citext` — already in `T-Shirt-constraints.sql`                                                         |
+| `indexes { (cart_id, product_variant_id) [unique] }` | `@@unique([cartId, productVariantId])`                                           | Composite uniques and indexes map directly; order of fields matters for which queries the index can serve as a prefix             |
+| `indexes { (order_id, created_at) }`                 | `@@index([orderId, createdAt])`                                                  | Same                                                                                                                              |
 
 **Prisma will not generate any of these — they must be added by hand to the migration SQL,**
 copied from `T-Shirt-constraints.sql`:
@@ -47,6 +47,10 @@ copied from `T-Shirt-constraints.sql`:
   `promo_codes`
 - The partial unique index `one_successful_payment_per_order` on `payments`
 - The partial index `stripe_events_unprocessed` on `stripe_events`
+- The partial unique index `product_variant_combo_unique` on `product_variants`
+  (`product_id`, `color_id`, `size_id`, live rows only) — a plain `@@unique` here would let a
+  soft-deleted variant's `deleted_at` row permanently block re-creating the same color+size
+  combination
 
 Prisma's schema-level `@@unique`/`@@index` cannot express a partial (`WHERE ...`) index — those
 two go into the migration as raw SQL after `prisma migrate dev` generates the rest.

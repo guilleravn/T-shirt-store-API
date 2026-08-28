@@ -218,13 +218,16 @@ Table product_variants {
   price_cents int         [not null]
   stock       int         [not null, default: 0]
   is_active   boolean     [not null, default: true]
+  deleted_at  timestamptz [null]
   created_at  timestamptz [not null, default: `now()`]
   updated_at  timestamptz [not null, default: `now()`]
 
   indexes {
-    (product_id, color_id, size_id) [unique]
+    (product_id, color_id, size_id)
   }
-  Note: 'La unidad que se vende y se cuenta. El precio vive aca, no en products (una XXL puede costar mas). El UNIQUE impide dos filas para la misma combinacion, que partiria el stock en dos lugares, y ademas sirve como indice por product_id gracias al prefijo: por eso NO hay un indice suelto de product_id. El sku se asigna, no se deriva de producto+color+talla: derivarlo haria que renombrar el producto cambiara el SKU historico. R3 y R8 gobiernan el descuento de stock. CHECK (stock >= 0) y CHECK (price_cents > 0) van en la migracion.'
+  Note: 'La unidad que se vende y se cuenta. El precio vive aca, no en products (una XXL puede costar mas). El indice (product_id, color_id, size_id) sirve como indice por product_id gracias al prefijo: por eso NO hay un indice suelto de product_id. El sku se asigna, no se deriva de producto+color+talla: derivarlo haria que renombrar el producto cambiara el SKU historico. R3 y R8 gobiernan el descuento de stock. CHECK (stock >= 0) y CHECK (price_cents > 0) van en la migracion.
+
+  deleted_at mirrors the products table delete/disable split: is_active=false hides a variant from customers while the manager still sees and can re-enable it; deleted_at hides it from everyone, manager included, and is permanent (no undelete endpoint). This replaces the old hard DELETE that the order_items FK blocked once a variant had ever been sold: order_items already freezes product_name, variant_label and unit_price_cents independent of the variant row, so history survives the row being marked deleted, and delete can now always succeed. The composite index above dropped its uniqueness because a soft-deleted row must not permanently block re-creating the same product_id, color_id, size_id combination later (e.g. discontinue and re-add the same color and size) — the real uniqueness lives in T-Shirt-constraints.sql as a partial index, the same pattern as payments.one_successful_payment_per_order.'
 }
 
 

@@ -87,6 +87,16 @@ CREATE INDEX stripe_events_unprocessed
   ON stripe_events (created_at)
   WHERE processed_at IS NULL;
 
+-- Soft-deleting a variant keeps its row (order_items needs it for
+-- history), so a plain UNIQUE(product_id, color_id, size_id) would
+-- permanently block re-creating the same color+size combo after a
+-- delete (e.g. discontinue fuchsia, then bring it back later). This
+-- partial index only enforces uniqueness among live rows; a deleted
+-- row simply stops counting.
+CREATE UNIQUE INDEX product_variant_combo_unique
+  ON product_variants (product_id, color_id, size_id)
+  WHERE deleted_at IS NULL;
+
 
 -- ═══════════════════════════════════════════════════════════
 --  EVALUADO Y DESCARTADO — dejar constancia del porque
