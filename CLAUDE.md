@@ -16,14 +16,20 @@ architecture write-up the challenge requires.
 ## Stack — current state
 
 - NestJS 11, TypeScript, Prisma ORM 7 (`prisma-client` generator, CommonJS output,
-  `@prisma/adapter-pg`), PostgreSQL 16 via Docker Compose for local dev.
-- `prisma/schema.prisma` has **no models yet** — generator/datasource only. Do not treat it as
-  authoritative; `docs/reference/erd/T-Shirt.dbml` is.
-- `src/` has only the Nest placeholder plus `PrismaModule`/`PrismaService` wiring — no domain
-  modules exist yet.
-- `openapi.yaml` is the real, current API contract (also published on SwaggerHub).
-- CASL (authorization) and BullMQ (queue) are decided but not installed — see
-  `docs/conventions/coding-style.md` and `docs/architecture.md`.
+  `@prisma/adapter-pg`), PostgreSQL 16 + Redis via Docker Compose for local dev.
+- `prisma/schema.prisma` has `User`, `RefreshToken`, `PasswordResetToken` (Auth) — everything
+  else (catalog, sales, promo) is still unmodeled. `docs/reference/erd/T-Shirt.dbml` stays
+  canonical; the schema is a partial, in-progress mapping of it, not a substitute for it.
+- `src/` has `AuthModule` (signup/signin/refresh/signout/forgot-password/reset-password/`/me`,
+  JWT + Passport, bcrypt for passwords, SHA-256 for token-table lookups) and `EmailModule`
+  (BullMQ-backed, stubbed `EmailService` that logs instead of sending — see
+  `docs/architecture.md`). Every other domain module from `docs/conventions/coding-style.md`'s
+  table (Catalog, Engagement, Sales, Promo) is still unbuilt.
+- `openapi.yaml` is the real, current API contract (also published on SwaggerHub). The API is
+  served under a global `/v1` prefix (set in `src/main.ts`).
+- `@nestjs/bullmq` (BullMQ on Redis) is installed and wired for the two email jobs above. CASL
+  (authorization) is still decided but not installed — see `docs/conventions/coding-style.md`.
+  No separate worker process exists yet; queue jobs run in-process with the API.
 
 ## Commands
 

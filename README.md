@@ -6,14 +6,16 @@ Backend API built with [NestJS](https://nestjs.com/), [Prisma ORM](https://www.p
 
 - **NestJS 11** (TypeScript)
 - **Prisma ORM 7** with the `prisma-client` generator (CommonJS output) and the `@prisma/adapter-pg` driver adapter
-- **PostgreSQL 16** (via Docker Compose for local development)
+- **PostgreSQL 16 + Redis 7** (via Docker Compose for local development)
+- **JWT auth** (`@nestjs/jwt` + `@nestjs/passport`), bcrypt for passwords
+- **BullMQ** (`@nestjs/bullmq`) for background jobs (currently: password-reset and password-changed emails)
 - Config validation with `@nestjs/config` + `joi`
 - Request validation with `class-validator` / `class-transformer`
 
 ## Prerequisites
 
 - Node.js 20.19+ (Node 24 in use during setup)
-- Docker Desktop (for the local Postgres container)
+- Docker Desktop (for the local Postgres and Redis containers)
 
 ## Getting started
 
@@ -29,15 +31,17 @@ Backend API built with [NestJS](https://nestjs.com/), [Prisma ORM](https://www.p
    cp .env.example .env
    ```
 
-3. Start Postgres (runs in Docker on host port `5433` to avoid clashing with any other local Postgres on `5432`):
+3. Start Postgres and Redis (host ports `5433` and `6380`, shifted off their defaults to avoid
+   clashing with anything else already running locally):
 
    ```bash
    npm run docker:up
    ```
 
-4. Generate the Prisma client (re-run any time `prisma/schema.prisma` changes):
+4. Apply migrations and generate the Prisma client:
 
    ```bash
+   npm run prisma:migrate
    npm run prisma:generate
    ```
 
@@ -47,7 +51,8 @@ Backend API built with [NestJS](https://nestjs.com/), [Prisma ORM](https://www.p
    npm run start:dev
    ```
 
-   The API listens on `http://localhost:3000` by default (`PORT` in `.env`).
+   The API listens on `http://localhost:3000/v1` by default (`PORT` in `.env`; the `/v1` prefix
+   is set in `src/main.ts`).
 
 ## Database workflow
 
@@ -55,7 +60,7 @@ Backend API built with [NestJS](https://nestjs.com/), [Prisma ORM](https://www.p
 - Create/apply a migration: `npm run prisma:migrate`
 - Regenerate the client after schema changes: `npm run prisma:generate`
 - Browse data: `npm run prisma:studio`
-- Stop the database container: `npm run docker:down`
+- Stop the Postgres/Redis containers: `npm run docker:down`
 
 The generated Prisma Client lives in `generated/prisma` (git-ignored) and is imported via `PrismaService` (`src/prisma/prisma.service.ts`), which is provided globally through `PrismaModule`.
 
@@ -63,28 +68,30 @@ The generated Prisma Client lives in `generated/prisma` (git-ignored) and is imp
 
 ```
 src/
+  auth/            # signup/signin/refresh/signout/forgot-password/reset-password, /me, JWT strategy/guard
+  email/           # BullMQ-backed EmailService (stubbed) + queue producer/processor
   config/          # env validation schema
   prisma/          # PrismaService + PrismaModule (global)
   app.module.ts
-  main.ts
+  main.ts          # global ValidationPipe + the /v1 route prefix
 prisma/
   schema.prisma
   migrations/
-docker-compose.yml # local Postgres container
+docker-compose.yml # local Postgres + Redis containers
 ```
 
 ## Scripts
 
-| Script | Description |
-| --- | --- |
-| `npm run start:dev` | Start the app in watch mode |
-| `npm run build` | Compile the project |
-| `npm run typecheck` | Type-check without emitting output |
-| `npm run lint` | Lint (check only) |
-| `npm run lint:fix` | Lint and auto-fix |
-| `npm test` | Run unit tests |
-| `npm run test:e2e` | Run end-to-end tests |
+| Script                              | Description                             |
+| ----------------------------------- | --------------------------------------- |
+| `npm run start:dev`                 | Start the app in watch mode             |
+| `npm run build`                     | Compile the project                     |
+| `npm run typecheck`                 | Type-check without emitting output      |
+| `npm run lint`                      | Lint (check only)                       |
+| `npm run lint:fix`                  | Lint and auto-fix                       |
+| `npm test`                          | Run unit tests                          |
+| `npm run test:e2e`                  | Run end-to-end tests                    |
 | `npm run docker:up` / `docker:down` | Start/stop the local Postgres container |
-| `npm run prisma:generate` | Regenerate the Prisma client |
-| `npm run prisma:migrate` | Create and apply a migration |
-| `npm run prisma:studio` | Open Prisma Studio |
+| `npm run prisma:generate`           | Regenerate the Prisma client            |
+| `npm run prisma:migrate`            | Create and apply a migration            |
+| `npm run prisma:studio`             | Open Prisma Studio                      |
