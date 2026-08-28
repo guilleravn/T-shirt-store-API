@@ -27,8 +27,8 @@ The DBML is canonical; if it contradicts this file, the DBML wins.
 
 ## Mapping to Prisma
 
-`prisma/schema.prisma` currently has no models — generator and datasource only (see
-[`CLAUDE.md`](../../CLAUDE.md) for current state). When models are added:
+See [`CLAUDE.md`](../../CLAUDE.md) for which tables `prisma/schema.prisma` currently models and
+which are still unmapped. The conventions below apply to every table as it gets added:
 
 | DBML                                                 | Prisma                                                                           | Note                                                                                                                              |
 | ---------------------------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
