@@ -6,6 +6,7 @@ import { ProductVariantsController } from './product-variants.controller';
 import { ProductVariantsService } from './product-variants.service';
 import { ProductsController } from './products.controller';
 import { ProductsService } from './products.service';
+import { S3ImageStorageService } from './s3-image-storage.service';
 
 @Module({
   imports: [PrismaModule],
@@ -14,6 +15,11 @@ import { ProductsService } from './products.service';
     ProductsController,
     ProductVariantsController,
   ],
-  providers: [CatalogReferenceService, ProductsService, ProductVariantsService],
+  providers: [
+    CatalogReferenceService,
+    ProductsService,
+    ProductVariantsService,
+    S3ImageStorageService,
+  ],
 })
 export class CatalogModule {}
