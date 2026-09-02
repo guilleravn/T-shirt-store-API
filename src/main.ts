@@ -2,10 +2,15 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // Must run before any route handles a request — same rule as any other Express middleware.
+  app.use(helmet());
+  app.enableCors();
 
   // The deploy target (architecture.md) sits behind a router — required for
   // @nestjs/throttler's IP extraction to read X-Forwarded-For instead of the proxy's own IP.
