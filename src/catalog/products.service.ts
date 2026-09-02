@@ -15,24 +15,44 @@ import {
   ProductSort,
 } from './dto/list-products-query.dto';
 import { PageMetaDto } from './dto/page-meta.dto';
-import { ProductCardResponseDto } from './dto/product-card-response.dto';
+import {
+  BuildImageUrl,
+  ProductCardResponseDto,
+} from './dto/product-card-response.dto';
 import { ProductDetailResponseDto } from './dto/product-detail-response.dto';
 import { ReplaceCategoriesResponseDto } from './dto/replace-categories-response.dto';
 import { SetActiveResponseDto } from './dto/set-active-response.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { S3ImageStorageService } from './s3-image-storage.service';
 
 export interface Requester {
   role: UserRole;
 }
 
+// The DBML's documented determinism rule for "the primary image" is
+// ORDER BY position, created_at, id LIMIT 1 — every include below sorts images this way so
+// callers can just take images[0].
+const IMAGES_INCLUDE: {
+  orderBy: Prisma.ProductImageOrderByWithRelationInput[];
+} = {
+  orderBy: [{ position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+};
+
 const PRODUCT_INCLUDE = {
   productCategories: { include: { category: true } },
   variants: { include: { color: true, size: true } },
+  images: IMAGES_INCLUDE,
 } as const;
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly buildImageUrl: BuildImageUrl = (key) =>
+    this.imageStorage.getPublicUrl(key);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly imageStorage: S3ImageStorageService,
+  ) {}
 
   async list(
     query: ListProductsQueryDto,
@@ -86,12 +106,15 @@ export class ProductsService {
         include: {
           productCategories: { include: { category: true } },
           variants: { where: variantVisibility },
+          images: IMAGES_INCLUDE,
         },
       }),
     ]);
 
     return {
-      data: products.map((product) => new ProductCardResponseDto(product)),
+      data: products.map(
+        (product) => new ProductCardResponseDto(product, this.buildImageUrl),
+      ),
       meta: new PageMetaDto({ total, limit, offset }),
     };
   }
@@ -113,12 +136,13 @@ export class ProductsService {
           where: this.variantVisibilityFilter(isManager, true),
           include: { color: true, size: true },
         },
+        images: IMAGES_INCLUDE,
       },
     });
     if (!product) {
       throw new NotFoundException('Product not found');
     }
-    return new ProductDetailResponseDto(product);
+    return new ProductDetailResponseDto(product, this.buildImageUrl);
   }
 
   async create(dto: CreateProductDto): Promise<ProductDetailResponseDto> {
@@ -164,7 +188,7 @@ export class ProductsService {
           include: PRODUCT_INCLUDE,
         });
       });
-      return new ProductDetailResponseDto(product);
+      return new ProductDetailResponseDto(product, this.buildImageUrl);
     } catch (error) {
       throw this.mapWriteError(error);
     }
@@ -369,6 +393,7 @@ export class ProductsService {
       include: {
         productCategories: { include: { category: true } },
         variants: { where: variantVisibility },
+        images: IMAGES_INCLUDE,
       },
     });
     const byId = new Map(products.map((product) => [product.id, product]));
@@ -378,7 +403,9 @@ export class ProductsService {
       .filter((product): product is NonNullable<typeof product> =>
         Boolean(product),
       )
-      .map((product) => new ProductCardResponseDto(product));
+      .map(
+        (product) => new ProductCardResponseDto(product, this.buildImageUrl),
+      );
 
     return {
       data,
