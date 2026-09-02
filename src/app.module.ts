@@ -8,6 +8,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { envValidationSchema } from './config/env.validation';
 import { AuthModule } from './auth/auth.module';
 import { CatalogModule } from './catalog/catalog.module';
+import { EngagementModule } from './engagement/engagement.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { CatalogModule } from './catalog/catalog.module';
     PrismaModule,
     AuthModule,
     CatalogModule,
+    EngagementModule,
   ],
   controllers: [AppController],
   providers: [AppService],
