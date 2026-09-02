@@ -35,6 +35,8 @@ model User {
 
   refreshTokens       RefreshToken[]
   passwordResetTokens PasswordResetToken[]
+  cart                Cart?
+  productLikes        ProductLike[]
 
   @@map("users")
 }
@@ -89,6 +91,7 @@ model Product {
   productCategories ProductCategory[]
   variants          ProductVariant[]
   images            ProductImage[]
+  likes             ProductLike[]
 
   @@index([isActive, deletedAt])
   @@map("products")
@@ -159,9 +162,51 @@ model ProductVariant {
   color   Color   @relation(fields: [colorId], references: [id], onDelete: Restrict)
   size    Size    @relation(fields: [sizeId], references: [id], onDelete: Restrict)
 
+  cartItems CartItem[]
+
   // Non-unique on purpose: a soft-deleted row must not permanently block re-creating the same
   // combo later. Real uniqueness is the partial index in T-Shirt-constraints.sql
   // (product_variant_combo_unique, WHERE deleted_at IS NULL).
   @@index([productId, colorId, sizeId])
   @@map("product_variants")
+}
+
+model Cart {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items CartItem[]
+
+  @@map("carts")
+}
+
+model CartItem {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cartId           String   @map("cart_id") @db.Uuid
+  productVariantId String   @map("product_variant_id") @db.Uuid
+  quantity         Int
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  cart    Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Restrict)
+
+  @@unique([cartId, productVariantId])
+  @@map("cart_items")
+}
+
+model ProductLike {
+  userId    String   @map("user_id") @db.Uuid
+  productId String   @map("product_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@id([userId, productId])
+  @@index([productId])
+  @@map("product_likes")
 }
