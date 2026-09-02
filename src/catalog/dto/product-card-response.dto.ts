@@ -14,6 +14,10 @@ export interface ProductCardSource {
   productCategories: { category: { id: string; name: string; slug: string } }[];
   variants: { priceCents: number; stock: number; isActive: boolean }[];
   images: ProductImageSource[];
+  _count: { likes: number };
+  // Present only when the query included it for the current requester (see LIKED_BY_ME_INCLUDE
+  // in products.service.ts) — a non-empty array means the requester liked this product.
+  likes?: { userId: string }[];
 }
 
 export type BuildImageUrl = (s3Key: string) => string;
@@ -58,8 +62,7 @@ export class ProductCardResponseDto {
       (variant) => variant.isActive && variant.stock > 0,
     );
 
-    // Engagement module doesn't exist yet — hardcoded until likes are built.
-    this.likesCount = 0;
-    this.likedByMe = false;
+    this.likesCount = product._count.likes;
+    this.likedByMe = (product.likes ?? []).length > 0;
   }
 }
