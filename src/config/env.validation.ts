@@ -8,4 +8,12 @@ export const envValidationSchema = Joi.object({
   DATABASE_URL: Joi.string()
     .uri({ scheme: ['postgresql', 'postgres'] })
     .required(),
+  REDIS_URL: Joi.string()
+    .uri({ scheme: ['redis', 'rediss'] })
+    .required(),
+  JWT_SECRET: Joi.string().min(32).required(),
+  JWT_REFRESH_TOKEN_TTL_DAYS: Joi.number().integer().positive().default(30),
+  BREVO_API_KEY: Joi.string().required(),
+  EMAIL_FROM_ADDRESS: Joi.string().email({ tlds: false }).required(),
+  EMAIL_FROM_NAME: Joi.string().default('T-Shirt Store'),
 });

@@ -4,11 +4,149 @@
 // Get a free hosted Postgres database in seconds: `npx create-db`
 
 generator client {
-  provider     = "prisma-client"
-  output       = "../generated/prisma"
-  moduleFormat = "cjs"
+  provider        = "prisma-client"
+  output          = "../generated/prisma"
+  moduleFormat    = "cjs"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
+  provider   = "postgresql"
+  extensions = [citext]
+}
+
+enum UserRole {
+  MANAGER
+  CLIENT
+  DELIVERY
+
+  @@map("user_role")
+}
+
+model User {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String   @unique @db.Citext
+  passwordHash String   @map("password_hash")
+  firstName    String   @map("first_name") @db.VarChar(80)
+  lastName     String   @map("last_name") @db.VarChar(80)
+  role         UserRole @default(CLIENT)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([userId, revokedAt])
+  @@map("refresh_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  usedAt    DateTime? @map("used_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([userId, createdAt])
+  @@map("password_reset_tokens")
+}
+
+model Category {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String   @unique @db.VarChar(80)
+  slug      String   @unique @db.VarChar(80)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  productCategories ProductCategory[]
+
+  @@map("categories")
+}
+
+model Product {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String    @db.VarChar(160)
+  description String?
+  isActive    Boolean   @default(true) @map("is_active")
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  productCategories ProductCategory[]
+  variants          ProductVariant[]
+
+  @@index([isActive, deletedAt])
+  @@map("products")
+}
+
+model ProductCategory {
+  productId  String @map("product_id") @db.Uuid
+  categoryId String @map("category_id") @db.Uuid
+
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([productId, categoryId])
+  @@index([categoryId])
+  @@map("product_categories")
+}
+
+model Color {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String   @unique @db.VarChar(50)
+  hexCode   String   @map("hex_code") @db.Char(7)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  variants ProductVariant[]
+
+  @@map("colors")
+}
+
+model Size {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String   @unique @db.VarChar(20)
+  position  Int      @unique
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  variants ProductVariant[]
+
+  @@map("sizes")
+}
+
+model ProductVariant {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productId  String    @map("product_id") @db.Uuid
+  colorId    String    @map("color_id") @db.Uuid
+  sizeId     String    @map("size_id") @db.Uuid
+  sku        String    @unique @db.VarChar(64)
+  priceCents Int       @map("price_cents")
+  stock      Int       @default(0)
+  isActive   Boolean   @default(true) @map("is_active")
+  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  color   Color   @relation(fields: [colorId], references: [id], onDelete: Restrict)
+  size    Size    @relation(fields: [sizeId], references: [id], onDelete: Restrict)
+
+  // Non-unique on purpose: a soft-deleted row must not permanently block re-creating the same
+  // combo later. Real uniqueness is the partial index in T-Shirt-constraints.sql
+  // (product_variant_combo_unique, WHERE deleted_at IS NULL).
+  @@index([productId, colorId, sizeId])
+  @@map("product_variants")
 }

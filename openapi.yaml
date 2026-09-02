@@ -307,6 +307,26 @@ paths:
         '403':
           description: "includeInactive=true with a role that isn't MANAGER"
           $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Products]
+      summary: Create a product, optionally with its initial variants (MANAGER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateProductDto' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProductDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /products/{productId}:
     parameters:
