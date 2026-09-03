@@ -88,25 +88,27 @@ export class AuthService {
   async refresh(dto: { refreshToken: string }): Promise<AuthTokensResponseDto> {
     const tokenHash = hashToken(dto.refreshToken);
 
-    return this.prisma.$transaction(async (tx) => {
-      const existing = await tx.refreshToken.findUnique({
-        where: { tokenHash },
+    const existing = await this.prisma.refreshToken.findUnique({
+      where: { tokenHash },
+    });
+    if (!existing) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    if (existing.revokedAt) {
+      // Reuse of an already-rotated token is the signal of theft (see
+      // business-invariants.md) — revoke every active session for this user, not just this one
+      // token. This runs and commits BEFORE the exception below, on purpose: throwing inside a
+      // $transaction would roll this update back along with everything else, silently undoing
+      // the revocation it exists to guarantee.
+      await this.prisma.refreshToken.updateMany({
+        where: { userId: existing.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
       });
-      if (!existing) {
-        throw new UnauthorizedException('Invalid refresh token');
-      }
+      throw new UnauthorizedException('Invalid refresh token');
+    }
 
-      if (existing.revokedAt) {
-        // Reuse of an already-rotated token is the signal of theft (see
-        // business-invariants.md) — revoke every active session for this user, not just this
-        // one token.
-        await tx.refreshToken.updateMany({
-          where: { userId: existing.userId, revokedAt: null },
-          data: { revokedAt: new Date() },
-        });
-        throw new UnauthorizedException('Invalid refresh token');
-      }
-
+    return this.prisma.$transaction(async (tx) => {
       // Conditional UPDATE, not read-then-write: guards two concurrent /auth/refresh calls
       // racing on the same row, same idiom R3 uses for stock.
       const { count } = await tx.refreshToken.updateMany({
