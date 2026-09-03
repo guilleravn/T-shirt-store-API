@@ -9,6 +9,7 @@ import { envValidationSchema } from './config/env.validation';
 import { AuthModule } from './auth/auth.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { EngagementModule } from './engagement/engagement.module';
+import { PromoModule } from './promo/promo.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { EngagementModule } from './engagement/engagement.module';
     AuthModule,
     CatalogModule,
     EngagementModule,
+    PromoModule,
   ],
   controllers: [AppController],
   providers: [AppService],
