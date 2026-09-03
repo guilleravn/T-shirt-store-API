@@ -111,19 +111,26 @@ export class PromoCodesService {
     id: string,
     dto: UpdatePromoCodeInput,
   ): Promise<PromoCodeResponseDto> {
-    const result = await this.prisma.promoCode.updateMany({
-      where: { id },
-      data: {
-        ...(dto.discountValue !== undefined && {
-          discountValue: dto.discountValue,
-        }),
-        ...(dto.minPurchaseCents !== undefined && {
-          minPurchaseCents: dto.minPurchaseCents,
-        }),
-        ...(dto.usageLimit !== undefined && { usageLimit: dto.usageLimit }),
-        ...(dto.expiresAt !== undefined && { expiresAt: dto.expiresAt }),
-      },
-    });
+    let result: { count: number };
+    try {
+      result = await this.prisma.promoCode.updateMany({
+        where: { id },
+        data: {
+          ...(dto.discountValue !== undefined && {
+            discountValue: dto.discountValue,
+          }),
+          ...(dto.minPurchaseCents !== undefined && {
+            minPurchaseCents: dto.minPurchaseCents,
+          }),
+          ...(dto.usageLimit !== undefined && { usageLimit: dto.usageLimit }),
+          ...(dto.expiresAt !== undefined && { expiresAt: dto.expiresAt }),
+        },
+      });
+    } catch (error) {
+      // A CHECK violation only fires once Postgres actually attempts the write, which means a
+      // row matched — so this is always "found but invalid", never "not found".
+      throw this.mapWriteError(error);
+    }
     if (result.count === 0) {
       throw new NotFoundException('Promo code not found');
     }
@@ -270,13 +277,20 @@ export class PromoCodesService {
   }
 
   private mapWriteError(error: unknown): unknown {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2002'
-    ) {
-      return new ConflictException(
-        'A promo code with this code already exists',
-      );
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === 'P2002') {
+        return new ConflictException(
+          'A promo code with this code already exists',
+        );
+      }
+      // P2039 is this Prisma version's code for a raw Postgres CHECK violation (SQLSTATE
+      // 23514) surfaced through the @prisma/adapter-pg driver adapter — confirmed by hitting
+      // the real constraint live, not the classic query engine's P2004.
+      if (error.code === 'P2039') {
+        return new BadRequestException(
+          'discountValue is not valid for this discountType (1-100 for PERCENTAGE, a positive amount in cents for FIXED)',
+        );
+      }
     }
     return error;
   }

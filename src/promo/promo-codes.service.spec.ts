@@ -120,6 +120,23 @@ describe('PromoCodesService', () => {
         }),
       ).rejects.toBeInstanceOf(ConflictException);
     });
+
+    it('maps a P2039 CHECK violation to BadRequestException', async () => {
+      prisma.promoCode.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('check failed', {
+          code: 'P2039',
+          clientVersion: 'test',
+        }),
+      );
+
+      await expect(
+        service.create({
+          code: 'SAVE500',
+          discountType: DiscountType.PERCENTAGE,
+          discountValue: 500,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 
   describe('update', () => {
@@ -129,6 +146,19 @@ describe('PromoCodesService', () => {
       await expect(
         service.update('missing', { discountValue: 20 }),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('maps a P2039 CHECK violation to BadRequestException instead of a raw 500', async () => {
+      prisma.promoCode.updateMany.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('check failed', {
+          code: 'P2039',
+          clientVersion: 'test',
+        }),
+      );
+
+      await expect(
+        service.update('promo-1', { discountValue: 500 }),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('only sends the fields that were actually provided', async () => {
