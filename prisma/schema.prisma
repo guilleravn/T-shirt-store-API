@@ -210,3 +210,25 @@ model ProductLike {
   @@index([productId])
   @@map("product_likes")
 }
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED
+
+  @@map("discount_type")
+}
+
+model PromoCode {
+  id               String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code             String       @unique @db.VarChar(40)
+  discountType     DiscountType @map("discount_type")
+  discountValue    Int          @map("discount_value")
+  minPurchaseCents Int?         @map("min_purchase_cents")
+  usageLimit       Int?         @map("usage_limit")
+  expiresAt        DateTime?    @map("expires_at") @db.Timestamptz
+  isActive         Boolean      @default(true) @map("is_active")
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("promo_codes")
+}
