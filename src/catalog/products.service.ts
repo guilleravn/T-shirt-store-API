@@ -26,6 +26,9 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { S3ImageStorageService } from './s3-image-storage.service';
 
 export interface Requester {
+  // Optional: only present for a real authenticated caller, used to personalize `likedByMe`.
+  // The internal MANAGER-view call from update() below has no real caller and omits it.
+  id?: string;
   role: UserRole;
 }
 
@@ -42,6 +45,7 @@ const PRODUCT_INCLUDE = {
   productCategories: { include: { category: true } },
   variants: { include: { color: true, size: true } },
   images: IMAGES_INCLUDE,
+  _count: { select: { likes: true } },
 } as const;
 
 @Injectable()
@@ -90,6 +94,7 @@ export class ProductsService {
         query.sort,
         limit,
         offset,
+        requester?.id,
       );
     }
 
@@ -107,6 +112,7 @@ export class ProductsService {
           productCategories: { include: { category: true } },
           variants: { where: variantVisibility },
           images: IMAGES_INCLUDE,
+          ...this.buildLikesInclude(requester?.id),
         },
       }),
     ]);
@@ -137,6 +143,7 @@ export class ProductsService {
           include: { color: true, size: true },
         },
         images: IMAGES_INCLUDE,
+        ...this.buildLikesInclude(requester?.id),
       },
     });
     if (!product) {
@@ -270,6 +277,17 @@ export class ProductsService {
     );
   }
 
+  // _count always runs; the `likes` existence-check only runs for an authenticated caller, so
+  // an anonymous request never needs likedByMe resolved to anything but false.
+  private buildLikesInclude(requesterId?: string) {
+    return {
+      _count: { select: { likes: true } },
+      ...(requesterId && {
+        likes: { where: { userId: requesterId }, select: { userId: true } },
+      }),
+    };
+  }
+
   private async assertCategoriesExist(categoryIds: string[]): Promise<void> {
     const count = await this.prisma.category.count({
       where: { id: { in: categoryIds } },
@@ -362,6 +380,7 @@ export class ProductsService {
     sort: ProductSort.PriceAsc | ProductSort.PriceDesc,
     limit: number,
     offset: number,
+    requesterId?: string,
   ): Promise<{ data: ProductCardResponseDto[]; meta: PageMetaDto }> {
     const variantWhere: Prisma.ProductVariantWhereInput = {
       ...variantVisibility,
@@ -394,6 +413,7 @@ export class ProductsService {
         productCategories: { include: { category: true } },
         variants: { where: variantVisibility },
         images: IMAGES_INCLUDE,
+        ...this.buildLikesInclude(requesterId),
       },
     });
     const byId = new Map(products.map((product) => [product.id, product]));

@@ -66,6 +66,7 @@ function buildProduct(overrides: Partial<Record<string, unknown>> = {}) {
       },
     ],
     images: [],
+    _count: { likes: 0 },
     ...overrides,
   };
 }
@@ -153,6 +154,47 @@ describe('ProductsService', () => {
       const result = await service.list({ limit: 20, offset: 0 });
 
       expect(result.data[0].primaryImage).toBeNull();
+    });
+
+    it('reports likesCount and likedByMe:false for an anonymous caller', async () => {
+      prisma.product.count.mockResolvedValue(1);
+      prisma.product.findMany.mockResolvedValue([
+        buildProduct({ _count: { likes: 5 } }),
+      ]);
+
+      const result = await service.list({ limit: 20, offset: 0 });
+
+      expect(prisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          include: expect.not.objectContaining({
+            likes: expect.anything() as unknown,
+          }) as Record<string, unknown>,
+        }),
+      );
+      expect(result.data[0].likesCount).toBe(5);
+      expect(result.data[0].likedByMe).toBe(false);
+    });
+
+    it('includes a likedByMe existence check for an authenticated caller', async () => {
+      prisma.product.count.mockResolvedValue(1);
+      prisma.product.findMany.mockResolvedValue([
+        buildProduct({ _count: { likes: 2 }, likes: [{ userId: 'user-1' }] }),
+      ]);
+
+      const result = await service.list(
+        { limit: 20, offset: 0 },
+        { id: 'user-1', role: UserRole.CLIENT },
+      );
+
+      expect(prisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          include: expect.objectContaining({
+            likes: { where: { userId: 'user-1' }, select: { userId: true } },
+          }) as Record<string, unknown>,
+        }),
+      );
+      expect(result.data[0].likesCount).toBe(2);
+      expect(result.data[0].likedByMe).toBe(true);
     });
 
     it('rejects includeInactive from an anonymous caller', async () => {
@@ -331,6 +373,20 @@ describe('ProductsService', () => {
       await expect(service.detail('missing')).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+
+    it('reports likedByMe:true when the caller already liked the product', async () => {
+      prisma.product.findFirst.mockResolvedValue(
+        buildProduct({ _count: { likes: 1 }, likes: [{ userId: 'user-1' }] }),
+      );
+
+      const result = await service.detail('prod-1', {
+        id: 'user-1',
+        role: UserRole.CLIENT,
+      });
+
+      expect(result.likesCount).toBe(1);
+      expect(result.likedByMe).toBe(true);
     });
 
     it('maps every image in the gallery', async () => {

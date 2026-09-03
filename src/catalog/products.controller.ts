@@ -36,7 +36,7 @@ export class ProductsController {
   list(@Query() query: ListProductsQueryDto, @CurrentUser() user?: User) {
     return this.productsService.list(
       query,
-      user ? { role: user.role } : undefined,
+      user ? { id: user.id, role: user.role } : undefined,
     );
   }
 
@@ -56,7 +56,7 @@ export class ProductsController {
   ) {
     return this.productsService.detail(
       productId,
-      user ? { role: user.role } : undefined,
+      user ? { id: user.id, role: user.role } : undefined,
     );
   }
 
