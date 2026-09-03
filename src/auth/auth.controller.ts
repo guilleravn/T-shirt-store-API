@@ -34,6 +34,8 @@ export class AuthController {
   }
 
   @Post('auth/signin')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60 * 1000 } })
   @HttpCode(HttpStatus.OK)
   signIn(@Body() dto: SignInDto): Promise<AuthTokensResponseDto> {
     return this.authService.signIn(dto);

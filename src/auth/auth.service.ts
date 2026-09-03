@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -195,7 +196,7 @@ export class AuthService {
         where: { tokenHash },
       });
       if (!resetToken) {
-        throw new UnauthorizedException('Invalid or expired token');
+        throw new BadRequestException('Invalid or expired token');
       }
 
       // Conditional UPDATE: prevents two concurrent submissions of the same token both
@@ -209,7 +210,7 @@ export class AuthService {
         data: { usedAt: new Date() },
       });
       if (count !== 1) {
-        throw new UnauthorizedException('Invalid or expired token');
+        throw new BadRequestException('Invalid or expired token');
       }
 
       const updatedUser = await tx.user.update({

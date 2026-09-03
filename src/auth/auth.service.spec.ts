@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
@@ -368,7 +369,7 @@ describe('AuthService', () => {
           token: 'nope',
           newPassword: 'NuevaSuperSegura123',
         }),
-      ).rejects.toThrow(UnauthorizedException);
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('rejects an expired or already-used token', async () => {
@@ -387,7 +388,7 @@ describe('AuthService', () => {
           token: 'raw-reset-token',
           newPassword: 'NuevaSuperSegura123',
         }),
-      ).rejects.toThrow(UnauthorizedException);
+      ).rejects.toThrow(BadRequestException);
     });
   });
 });
