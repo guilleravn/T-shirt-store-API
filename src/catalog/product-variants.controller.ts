@@ -10,8 +10,10 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { UserRole } from '../../generated/prisma/client';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -43,11 +45,17 @@ export class ProductVariantsController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  create(
+  async create(
     @Param('productId', ParseUUIDPipe) productId: string,
     @Body() dto: CreateVariantDto,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.productVariantsService.create(productId, dto);
+    const variant = await this.productVariantsService.create(productId, dto);
+    res.setHeader(
+      'Location',
+      `/v1/products/${productId}/variants/${variant.id}`,
+    );
+    return variant;
   }
 
   @Patch(':variantId')
@@ -82,6 +90,7 @@ export class ProductVariantsController {
   }
 
   @Post(':variantId/stock')
+  @HttpCode(HttpStatus.OK)
   adjustStock(
     @Param('productId', ParseUUIDPipe) productId: string,
     @Param('variantId', ParseUUIDPipe) variantId: string,
