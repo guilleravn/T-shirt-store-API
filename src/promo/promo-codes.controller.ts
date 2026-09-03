@@ -50,18 +50,21 @@ export class PromoCodesController {
 
   @Post(':promoCodeId/disable')
   @Roles(UserRole.MANAGER)
+  @HttpCode(HttpStatus.OK)
   disable(@Param('promoCodeId', ParseUUIDPipe) promoCodeId: string) {
     return this.promoCodesService.setActive(promoCodeId, false);
   }
 
   @Post(':promoCodeId/enable')
   @Roles(UserRole.MANAGER)
+  @HttpCode(HttpStatus.OK)
   enable(@Param('promoCodeId', ParseUUIDPipe) promoCodeId: string) {
     return this.promoCodesService.setActive(promoCodeId, true);
   }
 
   @Post('validate')
   @Roles(UserRole.CLIENT)
+  @HttpCode(HttpStatus.OK)
   validate(@Body() dto: ValidatePromoCodeDto) {
     return this.promoCodesService.validate(dto);
   }

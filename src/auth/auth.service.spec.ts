@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
@@ -219,6 +220,9 @@ describe('AuthService', () => {
           where: { userId: baseUser.id, revokedAt: null },
         }),
       );
+      // The revocation must not run inside $transaction: a throw there would roll it back along
+      // with everything else, silently undoing the exact thing this path exists to guarantee.
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('rejects when it loses the race to revoke the row (concurrent refresh)', async () => {
@@ -365,7 +369,7 @@ describe('AuthService', () => {
           token: 'nope',
           newPassword: 'NuevaSuperSegura123',
         }),
-      ).rejects.toThrow(UnauthorizedException);
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('rejects an expired or already-used token', async () => {
@@ -384,7 +388,7 @@ describe('AuthService', () => {
           token: 'raw-reset-token',
           newPassword: 'NuevaSuperSegura123',
         }),
-      ).rejects.toThrow(UnauthorizedException);
+      ).rejects.toThrow(BadRequestException);
     });
   });
 });

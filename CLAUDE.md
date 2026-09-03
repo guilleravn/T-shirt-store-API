@@ -17,21 +17,31 @@ architecture write-up the challenge requires.
 
 - NestJS 11, TypeScript, Prisma ORM 7 (`prisma-client` generator, CommonJS output,
   `@prisma/adapter-pg`), PostgreSQL 16 + Redis via Docker Compose for local dev.
-- `prisma/schema.prisma` has `User`, `RefreshToken`, `PasswordResetToken` (Auth) and `Category`,
-  `Product`, `ProductCategory`, `Color`, `Size`, `ProductVariant` (Catalog) — Sales and Promo are
-  still unmodeled. `docs/reference/erd/T-Shirt.dbml` stays canonical; the schema is a partial,
-  in-progress mapping of it, not a substitute for it.
+- `prisma/schema.prisma` has `User`, `RefreshToken`, `PasswordResetToken` (Auth); `Category`,
+  `Product`, `ProductCategory`, `Color`, `Size`, `ProductVariant`, `ProductImage` (Catalog);
+  `Cart`, `CartItem`, `ProductLike` (Engagement); and `PromoCode` (Promo) — Sales
+  (`orders`/`order_items`/`order_status_history`/`payments`/`stripe_events`) and
+  `promo_redemptions` (blocked on `orders` existing first, per its FK) are still unmodeled.
+  `docs/reference/erd/T-Shirt.dbml` stays canonical; the schema is a partial, in-progress mapping
+  of it, not a substitute for it.
 - `src/` has `AuthModule` (signup/signin/refresh/signout/forgot-password/reset-password/`/me`,
   JWT + Passport, bcrypt for passwords, SHA-256 for token-table lookups), `EmailModule`
   (BullMQ-backed; `EmailService` is bound to `BrevoEmailService`, sending real transactional
   email via `@getbrevo/brevo` — needs `BREVO_API_KEY`/`EMAIL_FROM_ADDRESS` in `.env`, and that
-  sender address verified in the Brevo dashboard, or sends fail), and `CatalogModule`
-  (categories/colors/sizes are read-only, seeded via `prisma/seed.ts`; products and their
-  variants/SKUs support the full CRUD `openapi.yaml` documents, MANAGER-gated via `RolesGuard`,
-  with product images and likes still out of scope — no storage provider or Engagement module
-  exists yet). Sales and Promo from `docs/conventions/coding-style.md`'s table are still unbuilt.
+  sender address verified in the Brevo dashboard, or sends fail), `CatalogModule`
+  (categories/colors/sizes are read-only, seeded via `prisma/seed.ts`; products, variants, and
+  product images all support the full CRUD `openapi.yaml` documents, MANAGER-gated via
+  `RolesGuard`; images are stored in S3 via `S3ImageStorageService`, needs
+  `AWS_REGION`/`AWS_S3_BUCKET`/`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in `.env`),
+  `EngagementModule` (cart and product likes, CLIENT-gated via `RolesGuard`), and `PromoModule`
+  (promo code CRUD + `/promo-codes/validate`, MANAGER/CLIENT-gated — usage-based status
+  (`EXHAUSTED`) always reads as unreachable today, since it depends on `promo_redemptions`,
+  which Sales hasn't added yet). Sales from `docs/conventions/coding-style.md`'s table is still
+  unbuilt.
 - `openapi.yaml` is the real, current API contract (also published on SwaggerHub). The API is
-  served under a global `/v1` prefix (set in `src/main.ts`).
+  served under a global `/v1` prefix (set in `src/main.ts`). Helmet and CORS are enabled globally
+  (`src/app.config.ts`, shared between `main.ts` and e2e tests so both configure the app
+  identically).
 - `@nestjs/bullmq` (BullMQ on Redis) is installed and wired for the two email jobs above. CASL
   (authorization) is still decided but not installed — see `docs/conventions/coding-style.md`.
   No separate worker process exists yet; queue jobs run in-process with the API.
