@@ -8,9 +8,11 @@ import {
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrderAbilityFactory } from './casl/order-ability.factory';
+import { CheckoutQueueService } from './queue/checkout-queue.service';
 import {
   DiscountType,
   OrderStatus,
+  PaymentStatus,
   Prisma,
   UserRole,
 } from '../../generated/prisma/client';
@@ -27,6 +29,8 @@ function buildPrismaMock() {
     },
     cart: { findUnique: jest.fn() },
     cartItem: { findMany: jest.fn() },
+    productVariant: { update: jest.fn() },
+    payment: { findFirst: jest.fn() },
     promoRedemption: { count: jest.fn(), create: jest.fn() },
     user: { findFirst: jest.fn() },
     orderStatusHistory: { create: jest.fn() },
@@ -36,6 +40,7 @@ function buildPrismaMock() {
   prisma.$transaction.mockImplementation(
     (callback: (tx: typeof prisma) => unknown) => callback(prisma),
   );
+  prisma.payment.findFirst.mockResolvedValue(null);
   return prisma;
 }
 
@@ -95,6 +100,7 @@ function buildOrder(overrides: Partial<Record<string, unknown>> = {}) {
     updatedAt: new Date(),
     items: [
       {
+        productVariantId: 'var-1',
         productName: 'Classic Tee',
         variantLabel: 'Black / M',
         quantity: 2,
@@ -119,14 +125,17 @@ function buildOrder(overrides: Partial<Record<string, unknown>> = {}) {
 describe('OrdersService', () => {
   let service: OrdersService;
   let prisma: ReturnType<typeof buildPrismaMock>;
+  let checkoutQueueService: { enqueueRefund: jest.Mock };
 
   beforeEach(async () => {
     prisma = buildPrismaMock();
+    checkoutQueueService = { enqueueRefund: jest.fn() };
     const module = await Test.createTestingModule({
       providers: [
         OrdersService,
         OrderAbilityFactory,
         { provide: PrismaService, useValue: prisma },
+        { provide: CheckoutQueueService, useValue: checkoutQueueService },
       ],
     }).compile();
     service = module.get(OrdersService);
@@ -725,6 +734,93 @@ describe('OrdersService', () => {
       await expect(
         service.cancel('order-1', buildUser({ role: UserRole.MANAGER }), {}),
       ).resolves.toBeDefined();
+    });
+
+    it('does not restore stock or enqueue a refund when cancelling a still-PENDING order', async () => {
+      prisma.order.findUnique
+        .mockResolvedValueOnce(buildOrder({ status: OrderStatus.PENDING }))
+        .mockResolvedValueOnce(buildOrder({ status: OrderStatus.CANCELLED }));
+
+      await service.cancel(
+        'order-1',
+        buildUser({ id: 'user-1', role: UserRole.CLIENT }),
+        {},
+      );
+
+      expect(prisma.productVariant.update).not.toHaveBeenCalled();
+      expect(checkoutQueueService.enqueueRefund).not.toHaveBeenCalled();
+    });
+
+    it('restores stock for each item when cancelling an already-PAID order', async () => {
+      prisma.order.findUnique
+        .mockResolvedValueOnce(
+          buildOrder({ userId: 'someone-else', status: OrderStatus.PAID }),
+        )
+        .mockResolvedValueOnce(
+          buildOrder({ userId: 'someone-else', status: OrderStatus.CANCELLED }),
+        );
+
+      await service.cancel(
+        'order-1',
+        buildUser({ role: UserRole.MANAGER }),
+        {},
+      );
+
+      expect(prisma.productVariant.update).toHaveBeenCalledWith({
+        where: { id: 'var-1' },
+        data: { stock: { increment: 2 } },
+      });
+    });
+
+    it('enqueues a refund when a SUCCEEDED payment exists for the cancelled order', async () => {
+      prisma.order.findUnique
+        .mockResolvedValueOnce(
+          buildOrder({
+            userId: 'someone-else',
+            status: OrderStatus.PROCESSING,
+          }),
+        )
+        .mockResolvedValueOnce(
+          buildOrder({ userId: 'someone-else', status: OrderStatus.CANCELLED }),
+        );
+      prisma.payment.findFirst.mockResolvedValue({
+        id: 'pay-1',
+        stripeReferenceId: 'pi_1',
+        status: PaymentStatus.SUCCEEDED,
+      });
+
+      await service.cancel(
+        'order-1',
+        buildUser({ role: UserRole.MANAGER }),
+        {},
+      );
+
+      expect(prisma.payment.findFirst).toHaveBeenCalledWith({
+        where: { orderId: 'order-1', status: PaymentStatus.SUCCEEDED },
+      });
+      expect(checkoutQueueService.enqueueRefund).toHaveBeenCalledWith({
+        paymentId: 'pay-1',
+        stripeReferenceId: 'pi_1',
+      });
+    });
+
+    it('does not enqueue a refund when no SUCCEEDED payment exists', async () => {
+      prisma.order.findUnique
+        .mockResolvedValueOnce(
+          buildOrder({ userId: 'someone-else', status: OrderStatus.PAID }),
+        )
+        .mockResolvedValueOnce(
+          buildOrder({ userId: 'someone-else', status: OrderStatus.CANCELLED }),
+        );
+      prisma.payment.findFirst.mockResolvedValue(null);
+
+      await service.cancel(
+        'order-1',
+        buildUser({ role: UserRole.MANAGER }),
+        {},
+      );
+
+      expect(checkoutQueueService.enqueueRefund).not.toHaveBeenCalled();
     });
   });
 });

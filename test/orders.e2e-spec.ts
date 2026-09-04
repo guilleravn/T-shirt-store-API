@@ -5,6 +5,7 @@ import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { OrdersService } from '../src/sales/orders.service';
 import { OrderAbilityFactory } from '../src/sales/casl/order-ability.factory';
+import { CheckoutQueueService } from '../src/sales/queue/checkout-queue.service';
 import { UserRole } from '../generated/prisma/client';
 
 describe('OrdersService (e2e, real database)', () => {
@@ -21,7 +22,17 @@ describe('OrdersService (e2e, real database)', () => {
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-      providers: [OrdersService, OrderAbilityFactory],
+      providers: [
+        OrdersService,
+        OrderAbilityFactory,
+        // Not exercised by these tests — a real instance would need a real BullMQ/Redis-backed
+        // queue, which is what SalesModule's own registration already provides; this is only
+        // here to satisfy OrdersService's constructor when it's re-provided at this root level.
+        {
+          provide: CheckoutQueueService,
+          useValue: { enqueueRefund: jest.fn() },
+        },
+      ],
     }).compile();
 
     app = moduleFixture.createNestApplication();

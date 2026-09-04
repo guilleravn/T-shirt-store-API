@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import {
   OrderStatus,
+  PaymentStatus,
   Prisma,
   User,
   UserRole,
@@ -24,6 +25,7 @@ import { OrderDetailResponseDto } from './dto/order-detail-response.dto';
 import { OrderSummaryResponseDto } from './dto/order-summary-response.dto';
 import { lockAndValidatePromoCode } from './promo-redemption.util';
 import { assertPurchasable } from './purchasability.util';
+import { CheckoutQueueService } from './queue/checkout-queue.service';
 
 export interface CreateOrderInput {
   promoCode?: string;
@@ -73,6 +75,7 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly orderAbilityFactory: OrderAbilityFactory,
+    private readonly checkoutQueueService: CheckoutQueueService,
   ) {}
 
   async create(
@@ -360,7 +363,7 @@ export class OrdersService {
       throw new ConflictException('Order can no longer be cancelled');
     }
 
-    await this.prisma.$transaction(async (tx) => {
+    const refundablePayment = await this.prisma.$transaction(async (tx) => {
       await tx.order.update({
         where: { id: orderId },
         data: { status: OrderStatus.CANCELLED },
@@ -373,7 +376,32 @@ export class OrdersService {
           note: dto.reason,
         },
       });
+
+      // Stock is only ever decremented once the webhook moves an order past PENDING (R3) — a
+      // still-PENDING cancel has nothing to restore.
+      if (order.status !== OrderStatus.PENDING) {
+        for (const item of order.items) {
+          await tx.productVariant.update({
+            where: { id: item.productVariantId },
+            data: { stock: { increment: item.quantity } },
+          });
+        }
+      }
+
+      return tx.payment.findFirst({
+        where: { orderId, status: PaymentStatus.SUCCEEDED },
+      });
     });
+
+    // Enqueued after the transaction commits, not inside it — same dual-write reasoning R8
+    // uses for stock: a synchronous Stripe call in here has no good answer for which side to
+    // trust if the other one fails.
+    if (refundablePayment) {
+      await this.checkoutQueueService.enqueueRefund({
+        paymentId: refundablePayment.id,
+        stripeReferenceId: refundablePayment.stripeReferenceId,
+      });
+    }
 
     return this.detail(orderId, user);
   }
