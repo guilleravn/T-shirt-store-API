@@ -12,7 +12,7 @@ import * as bcrypt from 'bcrypt';
 import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
-import { Prisma } from '../../generated/prisma/client';
+import { Prisma, UserRole } from '../../generated/prisma/client';
 import { hashToken } from './utils/token.util';
 
 function buildPrismaMock() {
@@ -20,6 +20,8 @@ function buildPrismaMock() {
     user: {
       create: jest.fn(),
       findUnique: jest.fn(),
+      findMany: jest.fn(),
+      count: jest.fn(),
       update: jest.fn(),
     },
     refreshToken: {
@@ -389,6 +391,37 @@ describe('AuthService', () => {
           newPassword: 'NuevaSuperSegura123',
         }),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('listUsers', () => {
+    it('filters by role and maps to the brief shape only', async () => {
+      prisma.user.count.mockResolvedValue(1);
+      prisma.user.findMany.mockResolvedValue([
+        { id: 'delivery-1', firstName: 'Dan', lastName: 'Delivery' },
+      ]);
+
+      const result = await service.listUsers({
+        role: UserRole.DELIVERY,
+        limit: 20,
+        offset: 0,
+      });
+
+      expect(prisma.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { role: 'DELIVERY' },
+          select: { id: true, firstName: true, lastName: true },
+        }),
+      );
+      expect(result.data).toEqual([
+        { id: 'delivery-1', firstName: 'Dan', lastName: 'Delivery' },
+      ]);
+      expect(result.meta).toEqual({
+        total: 1,
+        limit: 20,
+        offset: 0,
+        hasMore: false,
+      });
     });
   });
 });
