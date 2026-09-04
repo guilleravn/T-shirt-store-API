@@ -10,6 +10,7 @@ import { AuthModule } from './auth/auth.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { EngagementModule } from './engagement/engagement.module';
 import { PromoModule } from './promo/promo.module';
+import { SalesModule } from './sales/sales.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { PromoModule } from './promo/promo.module';
     CatalogModule,
     EngagementModule,
     PromoModule,
+    SalesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

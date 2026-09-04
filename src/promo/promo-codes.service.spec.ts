@@ -20,6 +20,9 @@ function buildPrismaMock() {
       findUniqueOrThrow: jest.fn(),
       findUnique: jest.fn(),
     },
+    promoRedemption: {
+      count: jest.fn().mockResolvedValue(0),
+    },
     productVariant: {
       findFirst: jest.fn(),
     },
@@ -83,6 +86,35 @@ describe('PromoCodesService', () => {
         offset: 0,
         hasMore: false,
       });
+    });
+  });
+
+  describe('usage counting (R5 wiring)', () => {
+    it('counts only non-CANCELLED redemptions for this code', async () => {
+      prisma.promoCode.count.mockResolvedValue(1);
+      prisma.promoCode.findMany.mockResolvedValue([buildPromoCode()]);
+
+      await service.list({ limit: 20, offset: 0 });
+
+      expect(prisma.promoRedemption.count).toHaveBeenCalledWith({
+        where: {
+          promoCodeId: 'promo-1',
+          order: { status: { not: 'CANCELLED' } },
+        },
+      });
+    });
+
+    it('reports EXHAUSTED and the real timesUsed once usage reaches the limit', async () => {
+      prisma.promoCode.count.mockResolvedValue(1);
+      prisma.promoCode.findMany.mockResolvedValue([
+        buildPromoCode({ usageLimit: 3 }),
+      ]);
+      prisma.promoRedemption.count.mockResolvedValue(3);
+
+      const result = await service.list({ limit: 20, offset: 0 });
+
+      expect(result.data[0].status).toBe(PromoCodeStatus.Exhausted);
+      expect(result.data[0].timesUsed).toBe(3);
     });
   });
 

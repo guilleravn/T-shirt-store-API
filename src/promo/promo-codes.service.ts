@@ -1,11 +1,11 @@
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { DiscountType, Prisma } from '../../generated/prisma/client';
 import { PageMetaDto } from '../catalog/dto/page-meta.dto';
+import { mapPrismaWriteError } from '../common/prisma-error.util';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   PromoCodeResponseDto,
@@ -83,7 +83,9 @@ export class PromoCodesService {
     ]);
 
     return {
-      data: promoCodes.map((promoCode) => this.toResponseDto(promoCode)),
+      data: await Promise.all(
+        promoCodes.map((promoCode) => this.toResponseDto(promoCode)),
+      ),
       meta: new PageMetaDto({ total, limit, offset }),
     };
   }
@@ -101,7 +103,7 @@ export class PromoCodesService {
           isActive: dto.isActive ?? true,
         },
       });
-      return this.toResponseDto(promoCode);
+      return await this.toResponseDto(promoCode);
     } catch (error) {
       throw this.mapWriteError(error);
     }
@@ -154,9 +156,10 @@ export class PromoCodesService {
     const promoCode = await this.prisma.promoCode.findUniqueOrThrow({
       where: { id },
     });
+    const usageCount = await this.countRedemptions(promoCode.id);
     return new SetPromoActiveResponseDto({
       id,
-      status: this.computeStatus(promoCode, 0),
+      status: this.computeStatus(promoCode, usageCount),
     });
   }
 
@@ -189,9 +192,8 @@ export class PromoCodesService {
       });
     }
 
-    // No orders/promo_redemptions table exists yet, so 0 is the true count today, not a stub —
-    // SalesModule will pass a real count here once checkout exists.
-    const status = this.computeStatus(promoCode, 0);
+    const usageCount = await this.countRedemptions(promoCode.id);
+    const status = this.computeStatus(promoCode, usageCount);
     const reason = this.reasonFor(status, promoCode, subtotalCents);
     const valid = reason === null;
     const discountCents = valid
@@ -242,9 +244,15 @@ export class PromoCodesService {
     return Math.min(promoCode.discountValue, subtotalCents);
   }
 
-  // usageCount is always 0 today — no orders/promo_redemptions table exists yet, so EXHAUSTED
-  // is genuinely unreachable, not faked. SalesModule will pass a real count once it exists;
-  // this method's logic doesn't need to change when that happens.
+  // R5: usage is counted live by joining promo_redemptions to orders and excluding CANCELLED —
+  // never a stored counter (see business-invariants.md). A cancelled order's redemption simply
+  // stops counting on its own; no separate "free the slot" step is needed.
+  private countRedemptions(promoCodeId: string): Promise<number> {
+    return this.prisma.promoRedemption.count({
+      where: { promoCodeId, order: { status: { not: 'CANCELLED' } } },
+    });
+  }
+
   private computeStatus(
     promoCode: StoredPromoCode,
     usageCount: number,
@@ -261,8 +269,10 @@ export class PromoCodesService {
     return PromoCodeStatus.Active;
   }
 
-  private toResponseDto(promoCode: StoredPromoCode): PromoCodeResponseDto {
-    const usageCount = 0;
+  private async toResponseDto(
+    promoCode: StoredPromoCode,
+  ): Promise<PromoCodeResponseDto> {
+    const usageCount = await this.countRedemptions(promoCode.id);
     return new PromoCodeResponseDto({
       id: promoCode.id,
       code: promoCode.code,
@@ -277,21 +287,13 @@ export class PromoCodesService {
   }
 
   private mapWriteError(error: unknown): unknown {
-    if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      if (error.code === 'P2002') {
-        return new ConflictException(
-          'A promo code with this code already exists',
-        );
-      }
+    return mapPrismaWriteError(error, {
+      uniqueViolation: 'A promo code with this code already exists',
       // P2039 is this Prisma version's code for a raw Postgres CHECK violation (SQLSTATE
       // 23514) surfaced through the @prisma/adapter-pg driver adapter — confirmed by hitting
       // the real constraint live, not the classic query engine's P2004.
-      if (error.code === 'P2039') {
-        return new BadRequestException(
-          'discountValue is not valid for this discountType (1-100 for PERCENTAGE, a positive amount in cents for FIXED)',
-        );
-      }
-    }
-    return error;
+      checkViolation:
+        'discountValue is not valid for this discountType (1-100 for PERCENTAGE, a positive amount in cents for FIXED)',
+    });
   }
 }

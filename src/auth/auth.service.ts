@@ -12,12 +12,15 @@ import * as bcrypt from 'bcrypt';
 import { Prisma, User } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
+import { PageMetaDto } from '../catalog/dto/page-meta.dto';
 import { SignUpDto } from './dto/sign-up.dto';
 import { SignInDto } from './dto/sign-in.dto';
 import { SignOutDto } from './dto/sign-out.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UserResponseDto } from './dto/user-response.dto';
+import { UserBriefResponseDto } from './dto/user-brief-response.dto';
+import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { AuthTokensResponseDto } from './dto/auth-tokens-response.dto';
 import { generateRawToken, hashToken } from './utils/token.util';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
@@ -235,6 +238,30 @@ export class AuthService {
       to: user.email,
       firstName: user.firstName,
     });
+  }
+
+  async listUsers(
+    query: ListUsersQueryDto,
+  ): Promise<{ data: UserBriefResponseDto[]; meta: PageMetaDto }> {
+    const where: Prisma.UserWhereInput = { role: query.role };
+    const limit = query.limit ?? 20;
+    const offset = query.offset ?? 0;
+
+    const [total, users] = await Promise.all([
+      this.prisma.user.count({ where }),
+      this.prisma.user.findMany({
+        where,
+        select: { id: true, firstName: true, lastName: true },
+        orderBy: { firstName: 'asc' },
+        skip: offset,
+        take: limit,
+      }),
+    ]);
+
+    return {
+      data: users.map((user) => new UserBriefResponseDto(user)),
+      meta: new PageMetaDto({ total, limit, offset }),
+    };
   }
 
   private async issueTokens(

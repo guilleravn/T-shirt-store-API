@@ -1,0 +1,546 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { ForbiddenError } from '@casl/ability';
+import {
+  DiscountType,
+  OrderStatus,
+  Prisma,
+  User,
+  UserRole,
+} from '../../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { mapPrismaWriteError } from '../common/prisma-error.util';
+import { PageMetaDto } from '../catalog/dto/page-meta.dto';
+import {
+  Action,
+  AppAbility,
+  OrderAbilityFactory,
+  OrderSubject,
+  orderSubject,
+} from './casl/order-ability.factory';
+import { OrderDetailResponseDto } from './dto/order-detail-response.dto';
+import { OrderSummaryResponseDto } from './dto/order-summary-response.dto';
+
+export interface CreateOrderInput {
+  promoCode?: string;
+}
+
+export interface ListOrdersInput {
+  from?: Date;
+  to?: Date;
+  status?: OrderStatus;
+  minTotalCents?: number;
+  maxTotalCents?: number;
+  userId?: string;
+  deliveryPersonId?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface UpdateOrderStatusInput {
+  status: OrderStatus;
+  deliveryPersonId?: string;
+  note?: string;
+}
+
+export interface CancelOrderInput {
+  reason?: string;
+}
+
+interface PurchasableProduct {
+  isActive: boolean;
+  deletedAt: Date | null;
+}
+
+interface PurchasableVariant {
+  isActive: boolean;
+  deletedAt: Date | null;
+  stock: number;
+}
+
+interface LockedPromoCodeRow {
+  id: string;
+  discountType: DiscountType;
+  discountValue: number;
+  minPurchaseCents: number | null;
+  usageLimit: number | null;
+  expiresAt: Date | null;
+  isActive: boolean;
+}
+
+const CANCELLABLE_STATUSES: OrderStatus[] = [
+  OrderStatus.PENDING,
+  OrderStatus.PAID,
+  OrderStatus.PROCESSING,
+];
+
+// user/deliveryPerson are `select`, never `include: true` — openapi.yaml's OrderDetail.customer
+// and .deliveryPerson only ever expose {id, firstName, lastName}, and TypeScript's DTO typing
+// doesn't strip a full User row (with passwordHash) assigned into it at runtime.
+const ORDER_DETAIL_INCLUDE = {
+  items: true,
+  statusHistory: { orderBy: { createdAt: 'asc' } },
+  user: { select: { id: true, firstName: true, lastName: true } },
+  deliveryPerson: { select: { id: true, firstName: true, lastName: true } },
+  promoRedemption: { include: { promoCode: { select: { code: true } } } },
+} as const;
+
+@Injectable()
+export class OrdersService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly orderAbilityFactory: OrderAbilityFactory,
+  ) {}
+
+  async create(
+    user: User,
+    dto: CreateOrderInput,
+  ): Promise<OrderDetailResponseDto> {
+    const existingPending = await this.prisma.order.findFirst({
+      where: { userId: user.id, status: OrderStatus.PENDING },
+    });
+    if (existingPending) {
+      throw new ConflictException('You already have a pending order');
+    }
+
+    const cart = await this.prisma.cart.findUnique({
+      where: { userId: user.id },
+    });
+    const cartItems = cart
+      ? await this.prisma.cartItem.findMany({
+          where: { cartId: cart.id },
+          include: {
+            variant: { include: { color: true, size: true, product: true } },
+          },
+        })
+      : [];
+    if (cartItems.length === 0) {
+      throw new BadRequestException('Cart is empty');
+    }
+
+    for (const item of cartItems) {
+      this.assertPurchasable(item.variant.product, item.variant, item.quantity);
+    }
+
+    const subtotalCents = cartItems.reduce(
+      (sum, item) => sum + item.quantity * item.variant.priceCents,
+      0,
+    );
+
+    try {
+      const order = await this.prisma.$transaction(async (tx) => {
+        let discountCents = 0;
+        let lockedPromoId: string | null = null;
+
+        if (dto.promoCode) {
+          const rows = await tx.$queryRaw<LockedPromoCodeRow[]>`
+            SELECT id, discount_type AS "discountType", discount_value AS "discountValue",
+                   min_purchase_cents AS "minPurchaseCents", usage_limit AS "usageLimit",
+                   expires_at AS "expiresAt", is_active AS "isActive"
+            FROM promo_codes WHERE code = ${dto.promoCode} FOR UPDATE
+          `;
+          const promo = rows[0];
+          if (!promo) {
+            throw new BadRequestException('Invalid promo code');
+          }
+
+          const usageCount = await tx.promoRedemption.count({
+            where: {
+              promoCodeId: promo.id,
+              order: { status: { not: OrderStatus.CANCELLED } },
+            },
+          });
+          this.assertPromoRedeemable(promo, usageCount, subtotalCents);
+
+          discountCents = this.computeDiscount(promo, subtotalCents);
+          lockedPromoId = promo.id;
+        }
+
+        const totalCents = subtotalCents - discountCents;
+
+        const createdOrder = await tx.order.create({
+          data: {
+            userId: user.id,
+            status: OrderStatus.PENDING,
+            subtotalCents,
+            discountCents,
+            totalCents,
+            items: {
+              create: cartItems.map((item) => ({
+                productVariantId: item.productVariantId,
+                quantity: item.quantity,
+                unitPriceCents: item.variant.priceCents,
+                productName: item.variant.product.name,
+                variantLabel: `${item.variant.color.name} / ${item.variant.size.name}`,
+              })),
+            },
+            statusHistory: {
+              create: {
+                status: OrderStatus.PENDING,
+                changedByUserId: user.id,
+              },
+            },
+          },
+        });
+
+        if (lockedPromoId) {
+          await tx.promoRedemption.create({
+            data: { promoCodeId: lockedPromoId, orderId: createdOrder.id },
+          });
+        }
+
+        return createdOrder;
+      });
+
+      return this.detail(order.id, user);
+    } catch (error) {
+      // The real concurrency guard for "one PENDING order per user" is the partial unique index
+      // (one_pending_order_per_user in T-Shirt-constraints.sql) — the findFirst check above is
+      // only a fast, non-atomic pre-check and can't close the race between two simultaneous
+      // POST /orders for the same user. Checked explicitly, not left to the generic
+      // uniqueViolation message below, since that one already means something else here (a
+      // duplicate order_items row).
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        this.isPendingOrderIndexViolation(error)
+      ) {
+        throw new ConflictException('You already have a pending order');
+      }
+      throw mapPrismaWriteError(error, {
+        uniqueViolation: 'This variant is already on the order',
+        checkViolation: 'Order totals failed validation',
+      });
+    }
+  }
+
+  // A partial unique index (not modeled as a Prisma field) surfaces its constraint name only
+  // through the @prisma/adapter-pg driver error's original Postgres message — confirmed live,
+  // since @prisma/client's own P2002 `meta.target` is empty for this kind of raw SQL index.
+  private isPendingOrderIndexViolation(
+    error: Prisma.PrismaClientKnownRequestError,
+  ): boolean {
+    if (error.code !== 'P2002') {
+      return false;
+    }
+    const meta = error.meta as
+      | { driverAdapterError?: { cause?: { originalMessage?: string } } }
+      | undefined;
+    return Boolean(
+      meta?.driverAdapterError?.cause?.originalMessage?.includes(
+        'one_pending_order_per_user',
+      ),
+    );
+  }
+
+  async list(
+    user: User,
+    query: ListOrdersInput,
+  ): Promise<{ data: OrderSummaryResponseDto[]; meta: PageMetaDto }> {
+    if (
+      (query.userId ?? query.deliveryPersonId) &&
+      user.role !== UserRole.MANAGER
+    ) {
+      throw new ForbiddenException("You don't have permission for this action");
+    }
+
+    const where: Prisma.OrderWhereInput = {
+      ...(user.role === UserRole.CLIENT && { userId: user.id }),
+      ...(user.role === UserRole.DELIVERY && { deliveryPersonId: user.id }),
+      ...(user.role === UserRole.MANAGER &&
+        query.userId && { userId: query.userId }),
+      ...(user.role === UserRole.MANAGER &&
+        query.deliveryPersonId && { deliveryPersonId: query.deliveryPersonId }),
+      ...(query.status && { status: query.status }),
+      ...((query.from ?? query.to) && {
+        createdAt: {
+          ...(query.from && { gte: query.from }),
+          ...(query.to && { lte: query.to }),
+        },
+      }),
+      ...((query.minTotalCents !== undefined ||
+        query.maxTotalCents !== undefined) && {
+        totalCents: {
+          ...(query.minTotalCents !== undefined && {
+            gte: query.minTotalCents,
+          }),
+          ...(query.maxTotalCents !== undefined && {
+            lte: query.maxTotalCents,
+          }),
+        },
+      }),
+    };
+
+    const limit = query.limit ?? 20;
+    const offset = query.offset ?? 0;
+
+    const [total, orders] = await Promise.all([
+      this.prisma.order.count({ where }),
+      this.prisma.order.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: offset,
+        take: limit,
+        include: {
+          _count: { select: { items: true } },
+          promoRedemption: {
+            include: { promoCode: { select: { code: true } } },
+          },
+        },
+      }),
+    ]);
+
+    return {
+      data: orders.map(
+        (order) =>
+          new OrderSummaryResponseDto({
+            id: order.id,
+            status: order.status,
+            createdAt: order.createdAt,
+            subtotalCents: order.subtotalCents,
+            discountCents: order.discountCents,
+            totalCents: order.totalCents,
+            currency: order.currency,
+            itemCount: order._count.items,
+            promoCode: order.promoRedemption?.promoCode.code ?? null,
+            deliveryPersonId: order.deliveryPersonId,
+          }),
+      ),
+      meta: new PageMetaDto({ total, limit, offset }),
+    };
+  }
+
+  async detail(orderId: string, user: User): Promise<OrderDetailResponseDto> {
+    const order = await this.fetchOrderDetail(orderId);
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const ability = this.orderAbilityFactory.createForUser(user);
+    this.authorize(ability, Action.Read, orderSubject(order));
+
+    return this.toDetailDto(order);
+  }
+
+  async updateStatus(
+    orderId: string,
+    user: User,
+    dto: UpdateOrderStatusInput,
+  ): Promise<OrderDetailResponseDto> {
+    const order = await this.fetchOrderDetail(orderId);
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const ability = this.orderAbilityFactory.createForUser(user);
+    this.authorize(ability, Action.Update, orderSubject(order));
+
+    this.assertValidTransition(order.status, dto.status, user.role);
+
+    if (dto.status === OrderStatus.SHIPPED) {
+      const deliveryPerson = dto.deliveryPersonId
+        ? await this.prisma.user.findFirst({
+            where: { id: dto.deliveryPersonId, role: UserRole.DELIVERY },
+          })
+        : null;
+      if (!deliveryPerson) {
+        throw new BadRequestException(
+          'deliveryPersonId must reference a DELIVERY user',
+        );
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          status: dto.status,
+          // R7: delivery_person_id is set exactly at the PROCESSING -> SHIPPED transition, in
+          // the same transaction as the status change — never anywhere else.
+          ...(dto.status === OrderStatus.SHIPPED && {
+            deliveryPersonId: dto.deliveryPersonId,
+          }),
+        },
+      });
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId,
+          status: dto.status,
+          changedByUserId: user.id,
+          note: dto.note,
+        },
+      });
+    });
+
+    return this.detail(orderId, user);
+  }
+
+  async cancel(
+    orderId: string,
+    user: User,
+    dto: CancelOrderInput,
+  ): Promise<OrderDetailResponseDto> {
+    const order = await this.fetchOrderDetail(orderId);
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const ability = this.orderAbilityFactory.createForUser(user);
+    this.authorize(ability, Action.Cancel, orderSubject(order));
+
+    if (!CANCELLABLE_STATUSES.includes(order.status)) {
+      throw new ConflictException('Order can no longer be cancelled');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.order.update({
+        where: { id: orderId },
+        data: { status: OrderStatus.CANCELLED },
+      });
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId,
+          status: OrderStatus.CANCELLED,
+          changedByUserId: user.id,
+          note: dto.reason,
+        },
+      });
+    });
+
+    return this.detail(orderId, user);
+  }
+
+  // coding-style.md: "Never throw a raw Error from a service" — CASL's ForbiddenError is a
+  // plain Error, not an HttpException, so left uncaught it reaches Nest's default filter as a
+  // raw 500 instead of the 403 every other permission check in this codebase returns.
+  private authorize(
+    ability: AppAbility,
+    action: Action,
+    subject: OrderSubject,
+  ): void {
+    try {
+      ForbiddenError.from(ability).throwUnlessCan(action, subject);
+    } catch (error) {
+      if (error instanceof ForbiddenError) {
+        throw new ForbiddenException(error.message);
+      }
+      throw error;
+    }
+  }
+
+  private fetchOrderDetail(orderId: string) {
+    return this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: ORDER_DETAIL_INCLUDE,
+    });
+  }
+
+  private toDetailDto(
+    order: NonNullable<Awaited<ReturnType<OrdersService['fetchOrderDetail']>>>,
+  ): OrderDetailResponseDto {
+    return new OrderDetailResponseDto({
+      id: order.id,
+      status: order.status,
+      createdAt: order.createdAt,
+      subtotalCents: order.subtotalCents,
+      discountCents: order.discountCents,
+      totalCents: order.totalCents,
+      currency: order.currency,
+      itemCount: order.items.length,
+      promoCode: order.promoRedemption?.promoCode.code ?? null,
+      deliveryPersonId: order.deliveryPersonId,
+      items: order.items,
+      statusHistory: order.statusHistory,
+      customer: order.user,
+      deliveryPerson: order.deliveryPerson,
+    });
+  }
+
+  // Strict, mirrors CartService.assertPurchasable — freezing a cart line that isn't currently
+  // purchasable into an order makes no sense. Duplicated rather than importing CartService,
+  // matching this codebase's convention of querying another domain's tables directly instead of
+  // a cross-module service dependency for a few lines of logic.
+  private assertPurchasable(
+    product: PurchasableProduct,
+    variant: PurchasableVariant,
+    quantity: number,
+  ): void {
+    if (product.deletedAt || !product.isActive) {
+      throw new ConflictException('Product is not available');
+    }
+    if (variant.deletedAt || !variant.isActive) {
+      throw new ConflictException('Variant is disabled');
+    }
+    if (variant.stock === 0) {
+      throw new ConflictException('Variant is out of stock');
+    }
+    if (variant.stock < quantity) {
+      throw new ConflictException('Insufficient stock');
+    }
+  }
+
+  // R5: called with the row already locked FOR UPDATE inside create()'s transaction. Mirrors
+  // PromoCodesService's validation, duplicated rather than imported — see the plan's decision
+  // not to couple PromoModule to an order-transaction-shaped Prisma client for this.
+  private assertPromoRedeemable(
+    promo: LockedPromoCodeRow,
+    usageCount: number,
+    subtotalCents: number,
+  ): void {
+    if (!promo.isActive) {
+      throw new BadRequestException('Promo code is disabled');
+    }
+    if (promo.expiresAt && promo.expiresAt < new Date()) {
+      throw new BadRequestException('Promo code has expired');
+    }
+    if (promo.usageLimit !== null && usageCount >= promo.usageLimit) {
+      throw new BadRequestException('Promo code usage limit reached');
+    }
+    if (
+      promo.minPurchaseCents !== null &&
+      subtotalCents < promo.minPurchaseCents
+    ) {
+      throw new BadRequestException(
+        'Order subtotal does not meet the promo code minimum purchase',
+      );
+    }
+  }
+
+  private computeDiscount(
+    promo: { discountType: DiscountType; discountValue: number },
+    subtotalCents: number,
+  ): number {
+    if (promo.discountType === DiscountType.PERCENTAGE) {
+      return Math.round((subtotalCents * promo.discountValue) / 100);
+    }
+    return Math.min(promo.discountValue, subtotalCents);
+  }
+
+  // Service-level business rule, not a guard's or CASL's concern (coding-style.md's dividing
+  // line): whether THIS status is reachable from the order's CURRENT status by THIS role.
+  private assertValidTransition(
+    current: OrderStatus,
+    target: OrderStatus,
+    role: UserRole,
+  ): void {
+    const valid =
+      (current === OrderStatus.PAID &&
+        target === OrderStatus.PROCESSING &&
+        role === UserRole.MANAGER) ||
+      (current === OrderStatus.PROCESSING &&
+        target === OrderStatus.SHIPPED &&
+        role === UserRole.MANAGER) ||
+      (current === OrderStatus.SHIPPED &&
+        target === OrderStatus.DELIVERED &&
+        role === UserRole.DELIVERY);
+    if (!valid) {
+      throw new ConflictException(
+        `Cannot transition from ${current} to ${target}`,
+      );
+    }
+  }
+}

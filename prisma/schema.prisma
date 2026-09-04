@@ -37,6 +37,9 @@ model User {
   passwordResetTokens PasswordResetToken[]
   cart                Cart?
   productLikes        ProductLike[]
+  ordersAsCustomer    Order[]              @relation("OrdersAsCustomer")
+  ordersAsDelivery    Order[]              @relation("OrdersAsDelivery")
+  orderStatusChanges  OrderStatusHistory[]
 
   @@map("users")
 }
@@ -162,7 +165,8 @@ model ProductVariant {
   color   Color   @relation(fields: [colorId], references: [id], onDelete: Restrict)
   size    Size    @relation(fields: [sizeId], references: [id], onDelete: Restrict)
 
-  cartItems CartItem[]
+  cartItems  CartItem[]
+  orderItems OrderItem[]
 
   // Non-unique on purpose: a soft-deleted row must not permanently block re-creating the same
   // combo later. Real uniqueness is the partial index in T-Shirt-constraints.sql
@@ -230,5 +234,88 @@ model PromoCode {
   createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz
   updatedAt        DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
+  redemptions PromoRedemption[]
+
   @@map("promo_codes")
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+
+  @@map("order_status")
+}
+
+model Order {
+  id               String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String      @map("user_id") @db.Uuid
+  deliveryPersonId String?     @map("delivery_person_id") @db.Uuid
+  status           OrderStatus @default(PENDING)
+  subtotalCents    Int         @map("subtotal_cents")
+  discountCents    Int         @default(0) @map("discount_cents")
+  totalCents       Int         @map("total_cents")
+  currency         String      @default("USD") @db.Char(3)
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  user            User                 @relation("OrdersAsCustomer", fields: [userId], references: [id], onDelete: Restrict)
+  deliveryPerson  User?                @relation("OrdersAsDelivery", fields: [deliveryPersonId], references: [id], onDelete: Restrict)
+  items           OrderItem[]
+  statusHistory   OrderStatusHistory[]
+  promoRedemption PromoRedemption?
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([deliveryPersonId, status])
+  @@map("orders")
+}
+
+model OrderItem {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId          String   @map("order_id") @db.Uuid
+  productVariantId String   @map("product_variant_id") @db.Uuid
+  quantity         Int
+  unitPriceCents   Int      @map("unit_price_cents")
+  productName      String   @map("product_name") @db.VarChar(160)
+  variantLabel     String   @map("variant_label") @db.VarChar(120)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Restrict)
+
+  @@unique([orderId, productVariantId])
+  @@index([productVariantId])
+  @@map("order_items")
+}
+
+model OrderStatusHistory {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId         String      @map("order_id") @db.Uuid
+  status          OrderStatus
+  changedByUserId String?     @map("changed_by_user_id") @db.Uuid
+  note            String?     @db.VarChar(255)
+  createdAt       DateTime    @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz
+
+  order         Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  changedByUser User? @relation(fields: [changedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, createdAt])
+  @@map("order_status_history")
+}
+
+model PromoRedemption {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  promoCodeId String   @map("promo_code_id") @db.Uuid
+  orderId     String   @unique @map("order_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  promoCode PromoCode @relation(fields: [promoCodeId], references: [id], onDelete: Restrict)
+  order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([promoCodeId])
+  @@map("promo_redemptions")
 }
