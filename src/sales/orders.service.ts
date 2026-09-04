@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import { ForbiddenError } from '@casl/ability';
 import {
-  DiscountType,
   OrderStatus,
   Prisma,
   User,
@@ -25,6 +24,7 @@ import {
 } from './casl/order-ability.factory';
 import { OrderDetailResponseDto } from './dto/order-detail-response.dto';
 import { OrderSummaryResponseDto } from './dto/order-summary-response.dto';
+import { lockAndValidatePromoCode } from './promo-redemption.util';
 
 export interface CreateOrderInput {
   promoCode?: string;
@@ -61,16 +61,6 @@ interface PurchasableVariant {
   isActive: boolean;
   deletedAt: Date | null;
   stock: number;
-}
-
-interface LockedPromoCodeRow {
-  id: string;
-  discountType: DiscountType;
-  discountValue: number;
-  minPurchaseCents: number | null;
-  usageLimit: number | null;
-  expiresAt: Date | null;
-  isActive: boolean;
 }
 
 const CANCELLABLE_STATUSES: OrderStatus[] = [
@@ -138,27 +128,13 @@ export class OrdersService {
         let lockedPromoId: string | null = null;
 
         if (dto.promoCode) {
-          const rows = await tx.$queryRaw<LockedPromoCodeRow[]>`
-            SELECT id, discount_type AS "discountType", discount_value AS "discountValue",
-                   min_purchase_cents AS "minPurchaseCents", usage_limit AS "usageLimit",
-                   expires_at AS "expiresAt", is_active AS "isActive"
-            FROM promo_codes WHERE code = ${dto.promoCode} FOR UPDATE
-          `;
-          const promo = rows[0];
-          if (!promo) {
-            throw new BadRequestException('Invalid promo code');
-          }
-
-          const usageCount = await tx.promoRedemption.count({
-            where: {
-              promoCodeId: promo.id,
-              order: { status: { not: OrderStatus.CANCELLED } },
-            },
-          });
-          this.assertPromoRedeemable(promo, usageCount, subtotalCents);
-
-          discountCents = this.computeDiscount(promo, subtotalCents);
-          lockedPromoId = promo.id;
+          const lock = await lockAndValidatePromoCode(
+            tx,
+            dto.promoCode,
+            subtotalCents,
+          );
+          discountCents = lock.discountCents;
+          lockedPromoId = lock.promoCodeId;
         }
 
         const totalCents = subtotalCents - discountCents;
@@ -481,43 +457,6 @@ export class OrdersService {
     if (variant.stock < quantity) {
       throw new ConflictException('Insufficient stock');
     }
-  }
-
-  // R5: called with the row already locked FOR UPDATE inside create()'s transaction. Mirrors
-  // PromoCodesService's validation, duplicated rather than imported — see the plan's decision
-  // not to couple PromoModule to an order-transaction-shaped Prisma client for this.
-  private assertPromoRedeemable(
-    promo: LockedPromoCodeRow,
-    usageCount: number,
-    subtotalCents: number,
-  ): void {
-    if (!promo.isActive) {
-      throw new BadRequestException('Promo code is disabled');
-    }
-    if (promo.expiresAt && promo.expiresAt < new Date()) {
-      throw new BadRequestException('Promo code has expired');
-    }
-    if (promo.usageLimit !== null && usageCount >= promo.usageLimit) {
-      throw new BadRequestException('Promo code usage limit reached');
-    }
-    if (
-      promo.minPurchaseCents !== null &&
-      subtotalCents < promo.minPurchaseCents
-    ) {
-      throw new BadRequestException(
-        'Order subtotal does not meet the promo code minimum purchase',
-      );
-    }
-  }
-
-  private computeDiscount(
-    promo: { discountType: DiscountType; discountValue: number },
-    subtotalCents: number,
-  ): number {
-    if (promo.discountType === DiscountType.PERCENTAGE) {
-      return Math.round((subtotalCents * promo.discountValue) / 100);
-    }
-    return Math.min(promo.discountValue, subtotalCents);
   }
 
   // Service-level business rule, not a guard's or CASL's concern (coding-style.md's dividing
