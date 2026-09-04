@@ -5,7 +5,12 @@ import { configureApp } from './app.config';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // Stripe webhook signature verification needs the exact raw bytes of the request body — this
+  // preserves them on req.rawBody alongside the normal parsed req.body for every route, with no
+  // effect on anything else.
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
   configureApp(app);
 
   const configService = app.get(ConfigService);
