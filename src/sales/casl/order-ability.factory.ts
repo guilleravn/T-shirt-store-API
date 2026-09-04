@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import {
   AbilityBuilder,
   createMongoAbility,
+  ForbiddenError,
   ForcedSubject,
   MongoAbility,
   subject,
@@ -14,6 +15,7 @@ export enum Action {
   Read = 'read',
   Update = 'update',
   Cancel = 'cancel',
+  Pay = 'pay',
 }
 
 // `ForcedSubject<'Order'>` is what tells CASL's type system "an instance of this shape is
@@ -41,6 +43,25 @@ export function orderSubject(order: {
   return subject('Order', order);
 }
 
+// coding-style.md: "Never throw a raw Error from a service" — CASL's ForbiddenError is a plain
+// Error, not an HttpException, so left uncaught it reaches Nest's default filter as a raw 500
+// instead of the 403 every other permission check in this codebase returns. Shared here, not
+// duplicated per service, since every Orders/Checkout call site needs the exact same conversion.
+export function authorizeOrderAction(
+  ability: AppAbility,
+  action: Action,
+  subject: OrderSubject,
+): void {
+  try {
+    ForbiddenError.from(ability).throwUnlessCan(action, subject);
+  } catch (error) {
+    if (error instanceof ForbiddenError) {
+      throw new ForbiddenException(error.message);
+    }
+    throw error;
+  }
+}
+
 @Injectable()
 export class OrderAbilityFactory {
   createForUser(user: User): AppAbility {
@@ -54,6 +75,7 @@ export class OrderAbilityFactory {
         can(Action.Create, 'Order');
         can(Action.Read, 'Order', { userId: user.id });
         can(Action.Cancel, 'Order', { userId: user.id });
+        can(Action.Pay, 'Order', { userId: user.id });
         break;
       case UserRole.DELIVERY:
         can(Action.Read, 'Order', { deliveryPersonId: user.id });

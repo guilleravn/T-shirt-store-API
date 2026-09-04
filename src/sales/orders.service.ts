@@ -5,7 +5,6 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ForbiddenError } from '@casl/ability';
 import {
   OrderStatus,
   Prisma,
@@ -17,14 +16,14 @@ import { mapPrismaWriteError } from '../common/prisma-error.util';
 import { PageMetaDto } from '../catalog/dto/page-meta.dto';
 import {
   Action,
-  AppAbility,
+  authorizeOrderAction,
   OrderAbilityFactory,
-  OrderSubject,
   orderSubject,
 } from './casl/order-ability.factory';
 import { OrderDetailResponseDto } from './dto/order-detail-response.dto';
 import { OrderSummaryResponseDto } from './dto/order-summary-response.dto';
 import { lockAndValidatePromoCode } from './promo-redemption.util';
+import { assertPurchasable } from './purchasability.util';
 
 export interface CreateOrderInput {
   promoCode?: string;
@@ -50,17 +49,6 @@ export interface UpdateOrderStatusInput {
 
 export interface CancelOrderInput {
   reason?: string;
-}
-
-interface PurchasableProduct {
-  isActive: boolean;
-  deletedAt: Date | null;
-}
-
-interface PurchasableVariant {
-  isActive: boolean;
-  deletedAt: Date | null;
-  stock: number;
 }
 
 const CANCELLABLE_STATUSES: OrderStatus[] = [
@@ -114,7 +102,7 @@ export class OrdersService {
     }
 
     for (const item of cartItems) {
-      this.assertPurchasable(item.variant.product, item.variant, item.quantity);
+      assertPurchasable(item.variant.product, item.variant, item.quantity);
     }
 
     const subtotalCents = cartItems.reduce(
@@ -297,7 +285,7 @@ export class OrdersService {
     }
 
     const ability = this.orderAbilityFactory.createForUser(user);
-    this.authorize(ability, Action.Read, orderSubject(order));
+    authorizeOrderAction(ability, Action.Read, orderSubject(order));
 
     return this.toDetailDto(order);
   }
@@ -313,7 +301,7 @@ export class OrdersService {
     }
 
     const ability = this.orderAbilityFactory.createForUser(user);
-    this.authorize(ability, Action.Update, orderSubject(order));
+    authorizeOrderAction(ability, Action.Update, orderSubject(order));
 
     this.assertValidTransition(order.status, dto.status, user.role);
 
@@ -366,7 +354,7 @@ export class OrdersService {
     }
 
     const ability = this.orderAbilityFactory.createForUser(user);
-    this.authorize(ability, Action.Cancel, orderSubject(order));
+    authorizeOrderAction(ability, Action.Cancel, orderSubject(order));
 
     if (!CANCELLABLE_STATUSES.includes(order.status)) {
       throw new ConflictException('Order can no longer be cancelled');
@@ -388,24 +376,6 @@ export class OrdersService {
     });
 
     return this.detail(orderId, user);
-  }
-
-  // coding-style.md: "Never throw a raw Error from a service" — CASL's ForbiddenError is a
-  // plain Error, not an HttpException, so left uncaught it reaches Nest's default filter as a
-  // raw 500 instead of the 403 every other permission check in this codebase returns.
-  private authorize(
-    ability: AppAbility,
-    action: Action,
-    subject: OrderSubject,
-  ): void {
-    try {
-      ForbiddenError.from(ability).throwUnlessCan(action, subject);
-    } catch (error) {
-      if (error instanceof ForbiddenError) {
-        throw new ForbiddenException(error.message);
-      }
-      throw error;
-    }
   }
 
   private fetchOrderDetail(orderId: string) {
@@ -434,29 +404,6 @@ export class OrdersService {
       customer: order.user,
       deliveryPerson: order.deliveryPerson,
     });
-  }
-
-  // Strict, mirrors CartService.assertPurchasable — freezing a cart line that isn't currently
-  // purchasable into an order makes no sense. Duplicated rather than importing CartService,
-  // matching this codebase's convention of querying another domain's tables directly instead of
-  // a cross-module service dependency for a few lines of logic.
-  private assertPurchasable(
-    product: PurchasableProduct,
-    variant: PurchasableVariant,
-    quantity: number,
-  ): void {
-    if (product.deletedAt || !product.isActive) {
-      throw new ConflictException('Product is not available');
-    }
-    if (variant.deletedAt || !variant.isActive) {
-      throw new ConflictException('Variant is disabled');
-    }
-    if (variant.stock === 0) {
-      throw new ConflictException('Variant is out of stock');
-    }
-    if (variant.stock < quantity) {
-      throw new ConflictException('Insufficient stock');
-    }
   }
 
   // Service-level business rule, not a guard's or CASL's concern (coding-style.md's dividing
