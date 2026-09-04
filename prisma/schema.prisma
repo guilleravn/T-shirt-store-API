@@ -283,6 +283,11 @@ model OrderItem {
   unitPriceCents   Int      @map("unit_price_cents")
   productName      String   @map("product_name") @db.VarChar(160)
   variantLabel     String   @map("variant_label") @db.VarChar(120)
+  // R8: false when the webhook's conditional UPDATE found insufficient stock for this line
+  // (oversold — recorded only as a free-text order_status_history note, never here) and true
+  // when it actually decremented. Without this, cancelling a PAID order can't tell which lines
+  // to restore stock for and which never had any taken.
+  stockDecremented Boolean  @default(false) @map("stock_decremented")
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)

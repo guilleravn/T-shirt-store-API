@@ -17,8 +17,17 @@ export interface OrderPersonSource {
   lastName: string;
 }
 
+export interface OrderPaymentSource {
+  method: string;
+  status: string;
+  amountCents: number;
+  paidAt: Date | null;
+  refundedAt: Date | null;
+}
+
 export interface OrderDetailSource extends OrderSummarySource {
   items: OrderItemLineSource[];
+  payment: OrderPaymentSource | null;
   statusHistory: OrderStatusHistoryEntrySource[];
   customer: OrderPersonSource | null;
   deliveryPerson: OrderPersonSource | null;
@@ -26,8 +35,10 @@ export interface OrderDetailSource extends OrderSummarySource {
 
 export class OrderDetailResponseDto extends OrderSummaryResponseDto {
   items: OrderItemLineResponseDto[];
-  // Always null in this branch — same reason as `paymentMethod` on the summary above.
-  payment: null;
+  // The most recent payment attempt for this order, whatever its status — null until one
+  // exists at all. Distinct from the inherited `paymentMethod`, which only ever reflects a
+  // SUCCEEDED attempt (business-invariants.md).
+  payment: OrderPaymentSource | null;
   statusHistory: OrderStatusHistoryEntryResponseDto[];
   customer: OrderPersonSource | null;
   deliveryPerson: OrderPersonSource | null;
@@ -35,7 +46,7 @@ export class OrderDetailResponseDto extends OrderSummaryResponseDto {
   constructor(source: OrderDetailSource) {
     super(source);
     this.items = source.items.map((item) => new OrderItemLineResponseDto(item));
-    this.payment = null;
+    this.payment = source.payment;
     this.statusHistory = source.statusHistory.map(
       (entry) => new OrderStatusHistoryEntryResponseDto(entry),
     );

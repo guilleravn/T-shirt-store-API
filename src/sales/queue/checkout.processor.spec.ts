@@ -29,7 +29,7 @@ describe('CheckoutProcessor', () => {
     processor = module.get(CheckoutProcessor);
   });
 
-  it('refunds the payment via Stripe, then marks refundedAt', async () => {
+  it('refunds the payment via Stripe with paymentId as the idempotency key, then marks refundedAt', async () => {
     stripeService.refundPayment.mockResolvedValue({ id: 're_1' });
 
     await processor.process(
@@ -39,7 +39,7 @@ describe('CheckoutProcessor', () => {
       }),
     );
 
-    expect(stripeService.refundPayment).toHaveBeenCalledWith('pi_1');
+    expect(stripeService.refundPayment).toHaveBeenCalledWith('pi_1', 'pay-1');
     expect(prisma.payment.update).toHaveBeenCalledWith({
       where: { id: 'pay-1' },
       data: { refundedAt: expect.any(Date) as Date },

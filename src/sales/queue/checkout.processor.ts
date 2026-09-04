@@ -34,7 +34,9 @@ export class CheckoutProcessor extends WorkerHost {
           paymentId: string;
           stripeReferenceId: string;
         };
-        await this.stripeService.refundPayment(stripeReferenceId);
+        // paymentId is unique and deterministic per refund — stable across BullMQ retries of
+        // this exact job, which is what makes it a correct idempotency key here.
+        await this.stripeService.refundPayment(stripeReferenceId, paymentId);
         await this.prisma.payment.update({
           where: { id: paymentId },
           data: { refundedAt: new Date() },

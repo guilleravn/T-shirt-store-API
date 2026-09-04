@@ -141,6 +141,15 @@ export class StripeWebhookService {
       include: { items: true },
     });
 
+    // A Payment Link purchase fires both checkout.session.completed and payment_intent.succeeded
+    // for the same order, in no guaranteed order (T-Shirt-constraints.sql's own note on why
+    // order_status_history has no UNIQUE(order_id, status)) — two genuinely different Stripe
+    // events, so R4's dedupe-by-stripeEventId does nothing to stop this method running twice.
+    // Whichever arrives second finds the order already PAID and must not re-run R3's decrement.
+    if (order.status !== OrderStatus.PENDING) {
+      return;
+    }
+
     const oversoldItems: string[] = [];
     for (const item of order.items) {
       const rows = await tx.$queryRaw<{ stock: number }[]>`
@@ -150,6 +159,13 @@ export class StripeWebhookService {
       `;
       if (rows.length === 0) {
         oversoldItems.push(item.productName);
+      } else {
+        // Recorded per line so a later cancellation (R8) knows exactly which lines actually had
+        // stock taken — the oversold note above is free text, not a queryable per-item flag.
+        await tx.orderItem.update({
+          where: { id: item.id },
+          data: { stockDecremented: true },
+        });
       }
     }
 

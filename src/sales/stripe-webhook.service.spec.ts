@@ -18,6 +18,7 @@ function buildPrismaMock() {
     },
     payment: { update: jest.fn(), create: jest.fn() },
     order: { findUniqueOrThrow: jest.fn(), update: jest.fn() },
+    orderItem: { update: jest.fn() },
     orderStatusHistory: { create: jest.fn() },
     cart: { findUnique: jest.fn() },
     cartItem: { deleteMany: jest.fn() },
@@ -34,8 +35,14 @@ function buildOrder(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: 'order-1',
     userId: 'user-1',
+    status: OrderStatus.PENDING,
     items: [
-      { productVariantId: 'var-1', quantity: 2, productName: 'Classic Tee' },
+      {
+        id: 'item-1',
+        productVariantId: 'var-1',
+        quantity: 2,
+        productName: 'Classic Tee',
+      },
     ],
     ...overrides,
   };
@@ -224,6 +231,10 @@ describe('StripeWebhookService', () => {
       expect(prisma.cartItem.deleteMany).toHaveBeenCalledWith({
         where: { cartId: 'cart-1' },
       });
+      expect(prisma.orderItem.update).toHaveBeenCalledWith({
+        where: { id: 'item-1' },
+        data: { stockDecremented: true },
+      });
     });
 
     it('R8: an oversold line still commits PAID, logs a note, and skips only that decrement', async () => {
@@ -248,6 +259,28 @@ describe('StripeWebhookService', () => {
           note: expect.stringContaining('Classic Tee') as string,
         }) as Record<string, unknown>,
       });
+      expect(prisma.orderItem.update).not.toHaveBeenCalled();
+    });
+
+    it('does not re-decrement stock when the order is already PAID (Payment Link dual-event)', async () => {
+      // A Payment Link purchase fires both checkout.session.completed and payment_intent.succeeded
+      // for the same order (T-Shirt-constraints.sql) — R4 dedupes by stripeEventId, which does
+      // nothing here since these are two distinct real events for the same underlying purchase.
+      mockEvent();
+      prisma.payment.update.mockResolvedValue({
+        id: 'pay-1',
+        method: PaymentMethod.PAYMENT_INTENT,
+      });
+      prisma.order.findUniqueOrThrow.mockResolvedValue(
+        buildOrder({ status: OrderStatus.PAID }),
+      );
+
+      await service.handleEvent(Buffer.from('{}'), 'sig');
+
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+      expect(prisma.order.update).not.toHaveBeenCalled();
+      expect(prisma.orderStatusHistory.create).not.toHaveBeenCalled();
+      expect(prisma.cartItem.deleteMany).not.toHaveBeenCalled();
     });
 
     it('does not clear the cart for a PAYMENT_LINK payment', async () => {

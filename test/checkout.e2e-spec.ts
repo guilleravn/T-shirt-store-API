@@ -264,6 +264,33 @@ describe('Checkout (e2e)', () => {
         .set('Authorization', `Bearer ${token}`)
         .expect(200);
       expect((cartResponse.body as { items: unknown[] }).items).toHaveLength(0);
+
+      const detailResponse = await request(app.getHttpServer())
+        .get(`/v1/orders/${order.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      const detail = detailResponse.body as {
+        paymentMethod: string | null;
+        payment: { method: string; status: string; amountCents: number } | null;
+      };
+      expect(detail.paymentMethod).toBe('PAYMENT_INTENT');
+      expect(detail.payment).toEqual(
+        expect.objectContaining({
+          method: 'PAYMENT_INTENT',
+          status: 'SUCCEEDED',
+        }),
+      );
+
+      const listResponse = await request(app.getHttpServer())
+        .get('/v1/orders')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      const listedOrder = (
+        listResponse.body as {
+          data: { id: string; paymentMethod: string | null }[];
+        }
+      ).data.find((o) => o.id === order.id);
+      expect(listedOrder?.paymentMethod).toBe('PAYMENT_INTENT');
     });
   });
 });

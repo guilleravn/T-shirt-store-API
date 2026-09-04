@@ -124,14 +124,15 @@ describe('StripeService', () => {
     );
   });
 
-  it('refunds a payment by PaymentIntent id', async () => {
+  it('refunds a payment by PaymentIntent id, with an idempotency key', async () => {
     mockStripeInstance.refunds.create.mockResolvedValue({ id: 're_1' });
 
-    await service.refundPayment('pi_1');
+    await service.refundPayment('pi_1', 'pay-1');
 
-    expect(mockStripeInstance.refunds.create).toHaveBeenCalledWith({
-      payment_intent: 'pi_1',
-    });
+    expect(mockStripeInstance.refunds.create).toHaveBeenCalledWith(
+      { payment_intent: 'pi_1' },
+      { idempotencyKey: 'pay-1' },
+    );
   });
 
   it('verifies and parses a webhook event using the webhook secret', () => {

@@ -82,8 +82,19 @@ export class StripeService {
   // Both checkout paths ultimately settle through a PaymentIntent (a Checkout Session in
   // `payment` mode creates one under the hood), so a refund always targets that same reference
   // type regardless of which flow produced the payment.
-  refundPayment(paymentIntentId: string): Promise<Stripe.Refund> {
-    return this.stripe.refunds.create({ payment_intent: paymentIntentId });
+  //
+  // idempotencyKey matters here specifically because this call is made from a retryable BullMQ
+  // job (CheckoutQueueService): if Stripe's refund succeeds but the job fails before recording
+  // that (a DB blip, a crash), the retry must return the original refund instead of attempting a
+  // second one — the same dual-write problem R8 exists to avoid for stock, one step later.
+  refundPayment(
+    paymentIntentId: string,
+    idempotencyKey: string,
+  ): Promise<Stripe.Refund> {
+    return this.stripe.refunds.create(
+      { payment_intent: paymentIntentId },
+      { idempotencyKey },
+    );
   }
 
   // Verifies and parses in one call. Throws Stripe.errors.StripeSignatureVerificationError on a

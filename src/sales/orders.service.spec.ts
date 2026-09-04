@@ -23,6 +23,7 @@ function buildPrismaMock() {
       findFirst: jest.fn(),
       findMany: jest.fn(),
       findUnique: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
       count: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
@@ -30,6 +31,7 @@ function buildPrismaMock() {
     cart: { findUnique: jest.fn() },
     cartItem: { findMany: jest.fn() },
     productVariant: { update: jest.fn() },
+    orderItem: { update: jest.fn() },
     payment: { findFirst: jest.fn() },
     promoRedemption: { count: jest.fn(), create: jest.fn() },
     user: { findFirst: jest.fn() },
@@ -100,11 +102,13 @@ function buildOrder(overrides: Partial<Record<string, unknown>> = {}) {
     updatedAt: new Date(),
     items: [
       {
+        id: 'item-1',
         productVariantId: 'var-1',
         productName: 'Classic Tee',
         variantLabel: 'Black / M',
         quantity: 2,
         unitPriceCents: 1500,
+        stockDecremented: true,
       },
     ],
     statusHistory: [
@@ -118,6 +122,7 @@ function buildOrder(overrides: Partial<Record<string, unknown>> = {}) {
     user: { id: 'user-1', firstName: 'Test', lastName: 'User' },
     deliveryPerson: null,
     promoRedemption: null,
+    payments: [],
     ...overrides,
   };
 }
@@ -664,6 +669,9 @@ describe('OrdersService', () => {
       prisma.order.findUnique
         .mockResolvedValueOnce(buildOrder({ status: OrderStatus.PENDING }))
         .mockResolvedValueOnce(buildOrder({ status: OrderStatus.CANCELLED }));
+      prisma.order.findUniqueOrThrow.mockResolvedValue(
+        buildOrder({ status: OrderStatus.PENDING }),
+      );
 
       await service.cancel(
         'order-1',
@@ -730,6 +738,9 @@ describe('OrdersService', () => {
         .mockResolvedValueOnce(
           buildOrder({ userId: 'someone-else', status: OrderStatus.CANCELLED }),
         );
+      prisma.order.findUniqueOrThrow.mockResolvedValue(
+        buildOrder({ userId: 'someone-else', status: OrderStatus.PAID }),
+      );
 
       await expect(
         service.cancel('order-1', buildUser({ role: UserRole.MANAGER }), {}),
@@ -737,9 +748,26 @@ describe('OrdersService', () => {
     });
 
     it('does not restore stock or enqueue a refund when cancelling a still-PENDING order', async () => {
+      // A real PENDING order never has stockDecremented: true on any line — only the webhook's
+      // finalizeSuccessfulPayment ever sets it, and that only runs once PENDING is left behind.
+      const pendingOrder = buildOrder({
+        status: OrderStatus.PENDING,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'var-1',
+            productName: 'Classic Tee',
+            variantLabel: 'Black / M',
+            quantity: 2,
+            unitPriceCents: 1500,
+            stockDecremented: false,
+          },
+        ],
+      });
       prisma.order.findUnique
-        .mockResolvedValueOnce(buildOrder({ status: OrderStatus.PENDING }))
+        .mockResolvedValueOnce(pendingOrder)
         .mockResolvedValueOnce(buildOrder({ status: OrderStatus.CANCELLED }));
+      prisma.order.findUniqueOrThrow.mockResolvedValue(pendingOrder);
 
       await service.cancel(
         'order-1',
@@ -751,7 +779,7 @@ describe('OrdersService', () => {
       expect(checkoutQueueService.enqueueRefund).not.toHaveBeenCalled();
     });
 
-    it('restores stock for each item when cancelling an already-PAID order', async () => {
+    it('restores stock for each item that was actually decremented when cancelling an already-PAID order', async () => {
       prisma.order.findUnique
         .mockResolvedValueOnce(
           buildOrder({ userId: 'someone-else', status: OrderStatus.PAID }),
@@ -759,6 +787,9 @@ describe('OrdersService', () => {
         .mockResolvedValueOnce(
           buildOrder({ userId: 'someone-else', status: OrderStatus.CANCELLED }),
         );
+      prisma.order.findUniqueOrThrow.mockResolvedValue(
+        buildOrder({ userId: 'someone-else', status: OrderStatus.PAID }),
+      );
 
       await service.cancel(
         'order-1',
@@ -770,6 +801,64 @@ describe('OrdersService', () => {
         where: { id: 'var-1' },
         data: { stock: { increment: 2 } },
       });
+      expect(prisma.orderItem.update).toHaveBeenCalledWith({
+        where: { id: 'item-1' },
+        data: { stockDecremented: false },
+      });
+    });
+
+    it('R8: skips restoring a line that was oversold and never actually decremented', async () => {
+      const orderWithOversoldLine = buildOrder({
+        userId: 'someone-else',
+        status: OrderStatus.PAID,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'var-1',
+            productName: 'Classic Tee',
+            variantLabel: 'Black / M',
+            quantity: 2,
+            unitPriceCents: 1500,
+            stockDecremented: false,
+          },
+        ],
+      });
+      prisma.order.findUnique
+        .mockResolvedValueOnce(orderWithOversoldLine)
+        .mockResolvedValueOnce(
+          buildOrder({ userId: 'someone-else', status: OrderStatus.CANCELLED }),
+        );
+      prisma.order.findUniqueOrThrow.mockResolvedValue(orderWithOversoldLine);
+
+      await service.cancel(
+        'order-1',
+        buildUser({ role: UserRole.MANAGER }),
+        {},
+      );
+
+      expect(prisma.productVariant.update).not.toHaveBeenCalled();
+      expect(prisma.orderItem.update).not.toHaveBeenCalled();
+    });
+
+    it('throws ConflictException when the order stops being cancellable between the pre-check and the transaction (TOCTOU)', async () => {
+      // The outer pre-check sees PENDING (still cancellable); by the time the transaction
+      // actually reads the row, the webhook has already moved it to SHIPPED — the fresh,
+      // in-transaction check must be what decides, not the stale value captured earlier.
+      prisma.order.findUnique.mockResolvedValue(
+        buildOrder({ status: OrderStatus.PENDING }),
+      );
+      prisma.order.findUniqueOrThrow.mockResolvedValue(
+        buildOrder({ status: OrderStatus.SHIPPED }),
+      );
+
+      await expect(
+        service.cancel(
+          'order-1',
+          buildUser({ id: 'user-1', role: UserRole.CLIENT }),
+          {},
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.order.update).not.toHaveBeenCalled();
     });
 
     it('enqueues a refund when a SUCCEEDED payment exists for the cancelled order', async () => {
@@ -783,6 +872,9 @@ describe('OrdersService', () => {
         .mockResolvedValueOnce(
           buildOrder({ userId: 'someone-else', status: OrderStatus.CANCELLED }),
         );
+      prisma.order.findUniqueOrThrow.mockResolvedValue(
+        buildOrder({ userId: 'someone-else', status: OrderStatus.PROCESSING }),
+      );
       prisma.payment.findFirst.mockResolvedValue({
         id: 'pay-1',
         stripeReferenceId: 'pi_1',
@@ -812,6 +904,9 @@ describe('OrdersService', () => {
         .mockResolvedValueOnce(
           buildOrder({ userId: 'someone-else', status: OrderStatus.CANCELLED }),
         );
+      prisma.order.findUniqueOrThrow.mockResolvedValue(
+        buildOrder({ userId: 'someone-else', status: OrderStatus.PAID }),
+      );
       prisma.payment.findFirst.mockResolvedValue(null);
 
       await service.cancel(

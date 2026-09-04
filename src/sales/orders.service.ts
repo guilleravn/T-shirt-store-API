@@ -68,6 +68,10 @@ const ORDER_DETAIL_INCLUDE = {
   user: { select: { id: true, firstName: true, lastName: true } },
   deliveryPerson: { select: { id: true, firstName: true, lastName: true } },
   promoRedemption: { include: { promoCode: { select: { code: true } } } },
+  // All attempts, not just the most recent — toDetailDto needs both "the latest attempt"
+  // (.payment) and "the one that actually succeeded, if any" (.paymentMethod), and a handful of
+  // rows per order is never worth a second query to separate them.
+  payments: { orderBy: { createdAt: 'desc' } },
 } as const;
 
 @Injectable()
@@ -257,6 +261,11 @@ export class OrdersService {
           promoRedemption: {
             include: { promoCode: { select: { code: true } } },
           },
+          // At most one row can match — one_successful_payment_per_order (partial unique index).
+          payments: {
+            where: { status: PaymentStatus.SUCCEEDED },
+            select: { method: true },
+          },
         },
       }),
     ]);
@@ -273,6 +282,7 @@ export class OrdersService {
             totalCents: order.totalCents,
             currency: order.currency,
             itemCount: order._count.items,
+            paymentMethod: order.payments[0]?.method ?? null,
             promoCode: order.promoRedemption?.promoCode.code ?? null,
             deliveryPersonId: order.deliveryPersonId,
           }),
@@ -364,6 +374,18 @@ export class OrdersService {
     }
 
     const refundablePayment = await this.prisma.$transaction(async (tx) => {
+      // Re-read and re-check status inside the transaction: the checks above can be stale by
+      // the time this actually runs — the webhook could have moved this order past PENDING
+      // (decrementing stock) in the window between that read and this transaction starting. A
+      // decision this transaction is about to act on has to be based on data read inside it.
+      const currentOrder = await tx.order.findUniqueOrThrow({
+        where: { id: orderId },
+        include: { items: true },
+      });
+      if (!CANCELLABLE_STATUSES.includes(currentOrder.status)) {
+        throw new ConflictException('Order can no longer be cancelled');
+      }
+
       await tx.order.update({
         where: { id: orderId },
         data: { status: OrderStatus.CANCELLED },
@@ -377,13 +399,18 @@ export class OrdersService {
         },
       });
 
-      // Stock is only ever decremented once the webhook moves an order past PENDING (R3) — a
-      // still-PENDING cancel has nothing to restore.
-      if (order.status !== OrderStatus.PENDING) {
-        for (const item of order.items) {
+      // Only lines that actually had stock taken (R8: an oversold line never did) get restored
+      // — restoring every line unconditionally would phantom-inflate stock for one that was
+      // never really decremented.
+      for (const item of currentOrder.items) {
+        if (item.stockDecremented) {
           await tx.productVariant.update({
             where: { id: item.productVariantId },
             data: { stock: { increment: item.quantity } },
+          });
+          await tx.orderItem.update({
+            where: { id: item.id },
+            data: { stockDecremented: false },
           });
         }
       }
@@ -416,6 +443,12 @@ export class OrdersService {
   private toDetailDto(
     order: NonNullable<Awaited<ReturnType<OrdersService['fetchOrderDetail']>>>,
   ): OrderDetailResponseDto {
+    const mostRecentPayment = order.payments[0] ?? null;
+    const succeededPayment =
+      order.payments.find(
+        (payment) => payment.status === PaymentStatus.SUCCEEDED,
+      ) ?? null;
+
     return new OrderDetailResponseDto({
       id: order.id,
       status: order.status,
@@ -425,6 +458,16 @@ export class OrdersService {
       totalCents: order.totalCents,
       currency: order.currency,
       itemCount: order.items.length,
+      paymentMethod: succeededPayment?.method ?? null,
+      payment: mostRecentPayment
+        ? {
+            method: mostRecentPayment.method,
+            status: mostRecentPayment.status,
+            amountCents: mostRecentPayment.amountCents,
+            paidAt: mostRecentPayment.paidAt,
+            refundedAt: mostRecentPayment.refundedAt,
+          }
+        : null,
       promoCode: order.promoRedemption?.promoCode.code ?? null,
       deliveryPersonId: order.deliveryPersonId,
       items: order.items,
