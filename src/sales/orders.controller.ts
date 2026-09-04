@@ -76,6 +76,7 @@ export class OrdersController {
 
   @Post(':orderId/cancel')
   @Roles(UserRole.CLIENT, UserRole.MANAGER)
+  @HttpCode(HttpStatus.OK)
   cancel(
     @Param('orderId', ParseUUIDPipe) orderId: string,
     @Body() dto: CancelOrderDto,
