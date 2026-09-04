@@ -267,6 +267,7 @@ model Order {
   items           OrderItem[]
   statusHistory   OrderStatusHistory[]
   promoRedemption PromoRedemption?
+  payments        Payment[]
 
   @@index([userId, createdAt])
   @@index([status, createdAt])
@@ -282,6 +283,11 @@ model OrderItem {
   unitPriceCents   Int      @map("unit_price_cents")
   productName      String   @map("product_name") @db.VarChar(160)
   variantLabel     String   @map("variant_label") @db.VarChar(120)
+  // R8: false when the webhook's conditional UPDATE found insufficient stock for this line
+  // (oversold — recorded only as a free-text order_status_history note, never here) and true
+  // when it actually decremented. Without this, cancelling a PAID order can't tell which lines
+  // to restore stock for and which never had any taken.
+  stockDecremented Boolean  @default(false) @map("stock_decremented")
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -318,4 +324,55 @@ model PromoRedemption {
 
   @@index([promoCodeId])
   @@map("promo_redemptions")
+}
+
+enum PaymentMethod {
+  PAYMENT_LINK
+  PAYMENT_INTENT
+
+  @@map("payment_method")
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+
+  @@map("payment_status")
+}
+
+model Payment {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId           String        @map("order_id") @db.Uuid
+  method            PaymentMethod
+  stripeReferenceId String        @unique @map("stripe_reference_id") @db.VarChar(255)
+  amountCents       Int           @map("amount_cents")
+  currency          String        @default("USD") @db.Char(3)
+  status            PaymentStatus @default(PENDING)
+  paidAt            DateTime?     @map("paid_at") @db.Timestamptz
+  refundedAt        DateTime?     @map("refunded_at") @db.Timestamptz
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  // Non-unique on purpose — a failed attempt and its retry coexist. Real uniqueness ("at most
+  // one SUCCEEDED per order") is the partial index in T-Shirt-constraints.sql,
+  // one_successful_payment_per_order, same pattern as product_variant_combo_unique.
+  @@index([orderId])
+  @@map("payments")
+}
+
+model StripeEvent {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  stripeEventId String    @unique @map("stripe_event_id") @db.VarChar(255)
+  type          String    @db.VarChar(100)
+  payload       Json
+  processedAt   DateTime? @map("processed_at") @db.Timestamptz
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  // No FKs — this is an idempotency log, not a domain table (DBML Note). Never query inside
+  // `payload` for business logic.
+  @@map("stripe_events")
 }

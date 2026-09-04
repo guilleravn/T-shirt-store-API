@@ -5,10 +5,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ForbiddenError } from '@casl/ability';
 import {
-  DiscountType,
   OrderStatus,
+  PaymentStatus,
   Prisma,
   User,
   UserRole,
@@ -18,13 +17,15 @@ import { mapPrismaWriteError } from '../common/prisma-error.util';
 import { PageMetaDto } from '../catalog/dto/page-meta.dto';
 import {
   Action,
-  AppAbility,
+  authorizeOrderAction,
   OrderAbilityFactory,
-  OrderSubject,
   orderSubject,
 } from './casl/order-ability.factory';
 import { OrderDetailResponseDto } from './dto/order-detail-response.dto';
 import { OrderSummaryResponseDto } from './dto/order-summary-response.dto';
+import { lockAndValidatePromoCode } from './promo-redemption.util';
+import { assertPurchasable } from './purchasability.util';
+import { CheckoutQueueService } from './queue/checkout-queue.service';
 
 export interface CreateOrderInput {
   promoCode?: string;
@@ -52,27 +53,6 @@ export interface CancelOrderInput {
   reason?: string;
 }
 
-interface PurchasableProduct {
-  isActive: boolean;
-  deletedAt: Date | null;
-}
-
-interface PurchasableVariant {
-  isActive: boolean;
-  deletedAt: Date | null;
-  stock: number;
-}
-
-interface LockedPromoCodeRow {
-  id: string;
-  discountType: DiscountType;
-  discountValue: number;
-  minPurchaseCents: number | null;
-  usageLimit: number | null;
-  expiresAt: Date | null;
-  isActive: boolean;
-}
-
 const CANCELLABLE_STATUSES: OrderStatus[] = [
   OrderStatus.PENDING,
   OrderStatus.PAID,
@@ -88,6 +68,10 @@ const ORDER_DETAIL_INCLUDE = {
   user: { select: { id: true, firstName: true, lastName: true } },
   deliveryPerson: { select: { id: true, firstName: true, lastName: true } },
   promoRedemption: { include: { promoCode: { select: { code: true } } } },
+  // All attempts, not just the most recent — toDetailDto needs both "the latest attempt"
+  // (.payment) and "the one that actually succeeded, if any" (.paymentMethod), and a handful of
+  // rows per order is never worth a second query to separate them.
+  payments: { orderBy: { createdAt: 'desc' } },
 } as const;
 
 @Injectable()
@@ -95,6 +79,7 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly orderAbilityFactory: OrderAbilityFactory,
+    private readonly checkoutQueueService: CheckoutQueueService,
   ) {}
 
   async create(
@@ -124,7 +109,7 @@ export class OrdersService {
     }
 
     for (const item of cartItems) {
-      this.assertPurchasable(item.variant.product, item.variant, item.quantity);
+      assertPurchasable(item.variant.product, item.variant, item.quantity);
     }
 
     const subtotalCents = cartItems.reduce(
@@ -138,27 +123,13 @@ export class OrdersService {
         let lockedPromoId: string | null = null;
 
         if (dto.promoCode) {
-          const rows = await tx.$queryRaw<LockedPromoCodeRow[]>`
-            SELECT id, discount_type AS "discountType", discount_value AS "discountValue",
-                   min_purchase_cents AS "minPurchaseCents", usage_limit AS "usageLimit",
-                   expires_at AS "expiresAt", is_active AS "isActive"
-            FROM promo_codes WHERE code = ${dto.promoCode} FOR UPDATE
-          `;
-          const promo = rows[0];
-          if (!promo) {
-            throw new BadRequestException('Invalid promo code');
-          }
-
-          const usageCount = await tx.promoRedemption.count({
-            where: {
-              promoCodeId: promo.id,
-              order: { status: { not: OrderStatus.CANCELLED } },
-            },
-          });
-          this.assertPromoRedeemable(promo, usageCount, subtotalCents);
-
-          discountCents = this.computeDiscount(promo, subtotalCents);
-          lockedPromoId = promo.id;
+          const lock = await lockAndValidatePromoCode(
+            tx,
+            dto.promoCode,
+            subtotalCents,
+          );
+          discountCents = lock.discountCents;
+          lockedPromoId = lock.promoCodeId;
         }
 
         const totalCents = subtotalCents - discountCents;
@@ -290,6 +261,11 @@ export class OrdersService {
           promoRedemption: {
             include: { promoCode: { select: { code: true } } },
           },
+          // At most one row can match — one_successful_payment_per_order (partial unique index).
+          payments: {
+            where: { status: PaymentStatus.SUCCEEDED },
+            select: { method: true },
+          },
         },
       }),
     ]);
@@ -306,6 +282,7 @@ export class OrdersService {
             totalCents: order.totalCents,
             currency: order.currency,
             itemCount: order._count.items,
+            paymentMethod: order.payments[0]?.method ?? null,
             promoCode: order.promoRedemption?.promoCode.code ?? null,
             deliveryPersonId: order.deliveryPersonId,
           }),
@@ -321,7 +298,7 @@ export class OrdersService {
     }
 
     const ability = this.orderAbilityFactory.createForUser(user);
-    this.authorize(ability, Action.Read, orderSubject(order));
+    authorizeOrderAction(ability, Action.Read, orderSubject(order));
 
     return this.toDetailDto(order);
   }
@@ -337,7 +314,7 @@ export class OrdersService {
     }
 
     const ability = this.orderAbilityFactory.createForUser(user);
-    this.authorize(ability, Action.Update, orderSubject(order));
+    authorizeOrderAction(ability, Action.Update, orderSubject(order));
 
     this.assertValidTransition(order.status, dto.status, user.role);
 
@@ -390,13 +367,25 @@ export class OrdersService {
     }
 
     const ability = this.orderAbilityFactory.createForUser(user);
-    this.authorize(ability, Action.Cancel, orderSubject(order));
+    authorizeOrderAction(ability, Action.Cancel, orderSubject(order));
 
     if (!CANCELLABLE_STATUSES.includes(order.status)) {
       throw new ConflictException('Order can no longer be cancelled');
     }
 
-    await this.prisma.$transaction(async (tx) => {
+    const refundablePayment = await this.prisma.$transaction(async (tx) => {
+      // Re-read and re-check status inside the transaction: the checks above can be stale by
+      // the time this actually runs — the webhook could have moved this order past PENDING
+      // (decrementing stock) in the window between that read and this transaction starting. A
+      // decision this transaction is about to act on has to be based on data read inside it.
+      const currentOrder = await tx.order.findUniqueOrThrow({
+        where: { id: orderId },
+        include: { items: true },
+      });
+      if (!CANCELLABLE_STATUSES.includes(currentOrder.status)) {
+        throw new ConflictException('Order can no longer be cancelled');
+      }
+
       await tx.order.update({
         where: { id: orderId },
         data: { status: OrderStatus.CANCELLED },
@@ -409,27 +398,39 @@ export class OrdersService {
           note: dto.reason,
         },
       });
+
+      // Only lines that actually had stock taken (R8: an oversold line never did) get restored
+      // — restoring every line unconditionally would phantom-inflate stock for one that was
+      // never really decremented.
+      for (const item of currentOrder.items) {
+        if (item.stockDecremented) {
+          await tx.productVariant.update({
+            where: { id: item.productVariantId },
+            data: { stock: { increment: item.quantity } },
+          });
+          await tx.orderItem.update({
+            where: { id: item.id },
+            data: { stockDecremented: false },
+          });
+        }
+      }
+
+      return tx.payment.findFirst({
+        where: { orderId, status: PaymentStatus.SUCCEEDED },
+      });
     });
 
-    return this.detail(orderId, user);
-  }
-
-  // coding-style.md: "Never throw a raw Error from a service" — CASL's ForbiddenError is a
-  // plain Error, not an HttpException, so left uncaught it reaches Nest's default filter as a
-  // raw 500 instead of the 403 every other permission check in this codebase returns.
-  private authorize(
-    ability: AppAbility,
-    action: Action,
-    subject: OrderSubject,
-  ): void {
-    try {
-      ForbiddenError.from(ability).throwUnlessCan(action, subject);
-    } catch (error) {
-      if (error instanceof ForbiddenError) {
-        throw new ForbiddenException(error.message);
-      }
-      throw error;
+    // Enqueued after the transaction commits, not inside it — same dual-write reasoning R8
+    // uses for stock: a synchronous Stripe call in here has no good answer for which side to
+    // trust if the other one fails.
+    if (refundablePayment) {
+      await this.checkoutQueueService.enqueueRefund({
+        paymentId: refundablePayment.id,
+        stripeReferenceId: refundablePayment.stripeReferenceId,
+      });
     }
+
+    return this.detail(orderId, user);
   }
 
   private fetchOrderDetail(orderId: string) {
@@ -442,6 +443,12 @@ export class OrdersService {
   private toDetailDto(
     order: NonNullable<Awaited<ReturnType<OrdersService['fetchOrderDetail']>>>,
   ): OrderDetailResponseDto {
+    const mostRecentPayment = order.payments[0] ?? null;
+    const succeededPayment =
+      order.payments.find(
+        (payment) => payment.status === PaymentStatus.SUCCEEDED,
+      ) ?? null;
+
     return new OrderDetailResponseDto({
       id: order.id,
       status: order.status,
@@ -451,6 +458,16 @@ export class OrdersService {
       totalCents: order.totalCents,
       currency: order.currency,
       itemCount: order.items.length,
+      paymentMethod: succeededPayment?.method ?? null,
+      payment: mostRecentPayment
+        ? {
+            method: mostRecentPayment.method,
+            status: mostRecentPayment.status,
+            amountCents: mostRecentPayment.amountCents,
+            paidAt: mostRecentPayment.paidAt,
+            refundedAt: mostRecentPayment.refundedAt,
+          }
+        : null,
       promoCode: order.promoRedemption?.promoCode.code ?? null,
       deliveryPersonId: order.deliveryPersonId,
       items: order.items,
@@ -458,66 +475,6 @@ export class OrdersService {
       customer: order.user,
       deliveryPerson: order.deliveryPerson,
     });
-  }
-
-  // Strict, mirrors CartService.assertPurchasable — freezing a cart line that isn't currently
-  // purchasable into an order makes no sense. Duplicated rather than importing CartService,
-  // matching this codebase's convention of querying another domain's tables directly instead of
-  // a cross-module service dependency for a few lines of logic.
-  private assertPurchasable(
-    product: PurchasableProduct,
-    variant: PurchasableVariant,
-    quantity: number,
-  ): void {
-    if (product.deletedAt || !product.isActive) {
-      throw new ConflictException('Product is not available');
-    }
-    if (variant.deletedAt || !variant.isActive) {
-      throw new ConflictException('Variant is disabled');
-    }
-    if (variant.stock === 0) {
-      throw new ConflictException('Variant is out of stock');
-    }
-    if (variant.stock < quantity) {
-      throw new ConflictException('Insufficient stock');
-    }
-  }
-
-  // R5: called with the row already locked FOR UPDATE inside create()'s transaction. Mirrors
-  // PromoCodesService's validation, duplicated rather than imported — see the plan's decision
-  // not to couple PromoModule to an order-transaction-shaped Prisma client for this.
-  private assertPromoRedeemable(
-    promo: LockedPromoCodeRow,
-    usageCount: number,
-    subtotalCents: number,
-  ): void {
-    if (!promo.isActive) {
-      throw new BadRequestException('Promo code is disabled');
-    }
-    if (promo.expiresAt && promo.expiresAt < new Date()) {
-      throw new BadRequestException('Promo code has expired');
-    }
-    if (promo.usageLimit !== null && usageCount >= promo.usageLimit) {
-      throw new BadRequestException('Promo code usage limit reached');
-    }
-    if (
-      promo.minPurchaseCents !== null &&
-      subtotalCents < promo.minPurchaseCents
-    ) {
-      throw new BadRequestException(
-        'Order subtotal does not meet the promo code minimum purchase',
-      );
-    }
-  }
-
-  private computeDiscount(
-    promo: { discountType: DiscountType; discountValue: number },
-    subtotalCents: number,
-  ): number {
-    if (promo.discountType === DiscountType.PERCENTAGE) {
-      return Math.round((subtotalCents * promo.discountValue) / 100);
-    }
-    return Math.min(promo.discountValue, subtotalCents);
   }
 
   // Service-level business rule, not a guard's or CASL's concern (coding-style.md's dividing

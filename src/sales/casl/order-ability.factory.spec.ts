@@ -43,6 +43,9 @@ describe('OrderAbilityFactory', () => {
         ability.can(Action.Cancel, order({ userId: 'someone-else' })),
       ).toBe(true);
       expect(ability.can(Action.Create, 'Order')).toBe(true);
+      expect(ability.can(Action.Pay, order({ userId: 'someone-else' }))).toBe(
+        true,
+      );
     });
 
     it('passes a bare subject-type check with no instance at all', () => {
@@ -83,6 +86,15 @@ describe('OrderAbilityFactory', () => {
     it('can never update an order status', () => {
       const ability = factory.createForUser(user);
       expect(ability.can(Action.Update, order({ userId: 'client-1' }))).toBe(
+        false,
+      );
+    });
+
+    it('can pay only for their own orders', () => {
+      const ability = factory.createForUser(user);
+
+      expect(ability.can(Action.Pay, order({ userId: 'client-1' }))).toBe(true);
+      expect(ability.can(Action.Pay, order({ userId: 'someone-else' }))).toBe(
         false,
       );
     });
@@ -138,6 +150,16 @@ describe('OrderAbilityFactory', () => {
     it('cannot create orders', () => {
       const ability = factory.createForUser(user);
       expect(ability.can(Action.Create, 'Order')).toBe(false);
+    });
+
+    it('cannot pay for an order', () => {
+      const ability = factory.createForUser(user);
+      expect(
+        ability.can(
+          Action.Pay,
+          order({ userId: 'client-1', deliveryPersonId: 'delivery-1' }),
+        ),
+      ).toBe(false);
     });
   });
 });

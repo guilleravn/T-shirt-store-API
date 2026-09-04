@@ -5,6 +5,7 @@ import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { OrdersService } from '../src/sales/orders.service';
 import { OrderAbilityFactory } from '../src/sales/casl/order-ability.factory';
+import { CheckoutQueueService } from '../src/sales/queue/checkout-queue.service';
 import { DiscountType, UserRole } from '../generated/prisma/client';
 
 // R5: two simultaneous checkouts against a promo code with exactly one redemption slot left.
@@ -27,7 +28,15 @@ describe('Orders / promo redemption concurrency (e2e)', () => {
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-      providers: [OrdersService, OrderAbilityFactory],
+      providers: [
+        OrdersService,
+        OrderAbilityFactory,
+        // Not exercised by this test — see the same note in orders.e2e-spec.ts.
+        {
+          provide: CheckoutQueueService,
+          useValue: { enqueueRefund: jest.fn() },
+        },
+      ],
     }).compile();
 
     app = moduleFixture.createNestApplication();

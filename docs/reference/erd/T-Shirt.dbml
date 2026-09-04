@@ -301,13 +301,14 @@ Table order_items {
   unit_price_cents   int          [not null]
   product_name       varchar(160) [not null]
   variant_label      varchar(120) [not null]
+  stock_decremented  boolean      [not null, default: false]
   created_at         timestamptz  [not null, default: `now()`]
 
   indexes {
     (order_id, product_variant_id) [unique]
     (product_variant_id)
   }
-  Note: 'unit_price_cents, product_name y variant_label son copias del momento de la compra, y NO son violacion de 3NF: la dependencia product_variant_id -> product_name no se cumple en esta relacion, porque dos filas con la misma variante pueden tener legitimamente nombres distintos si el producto se renombro entre las dos compras. Sin dependencia funcional no hay dependencia transitiva. Gracias a esto el historial no depende del catalogo. Sin subtotal: quantity x unit_price es calculo puro. El UNIQUE(order_id, product_variant_id) impide dos lineas de la misma variante con precios distintos (cart_items ya lo impedia y las ordenes nacen del carrito) y ademas sirve como indice por order_id por prefijo: por eso no hay un indice suelto. El indice por product_variant_id lo usa el anti-join del job de stock bajo. CHECK (quantity > 0) y CHECK (unit_price_cents > 0) van en la migracion.'
+  Note: 'unit_price_cents, product_name y variant_label son copias del momento de la compra, y NO son violacion de 3NF: la dependencia product_variant_id -> product_name no se cumple en esta relacion, porque dos filas con la misma variante pueden tener legitimamente nombres distintos si el producto se renombro entre las dos compras. Sin dependencia funcional no hay dependencia transitiva. Gracias a esto el historial no depende del catalogo. Sin subtotal: quantity x unit_price es calculo puro. El UNIQUE(order_id, product_variant_id) impide dos lineas de la misma variante con precios distintos (cart_items ya lo impedia y las ordenes nacen del carrito) y ademas sirve como indice por order_id por prefijo: por eso no hay un indice suelto. El indice por product_variant_id lo usa el anti-join del job de stock bajo. CHECK (quantity > 0) y CHECK (unit_price_cents > 0) van en la migracion. stock_decremented: false cuando el UPDATE condicional del webhook (R3) encontro stock insuficiente para esta linea (oversold, R8) y no desconto nada; true cuando si desconto. Sin esto, cancelar una orden PAID no puede distinguir que lineas restaurar: restaurar todas infla stock fantasma en la linea que nunca se habia descontado, y R8 solo deja una nota de texto libre en order_status_history, no un flag por linea consultable.'
 }
 
 Table order_status_history {

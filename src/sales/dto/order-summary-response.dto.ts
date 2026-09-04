@@ -7,6 +7,7 @@ export interface OrderSummarySource {
   totalCents: number;
   currency: string;
   itemCount: number;
+  paymentMethod: string | null;
   promoCode: string | null;
   deliveryPersonId: string | null;
 }
@@ -20,8 +21,8 @@ export class OrderSummaryResponseDto {
   totalCents: number;
   currency: string;
   itemCount: number;
-  // Always null in this branch — no payments table exists yet (see openapi.yaml's own note:
-  // "Null until a payment attempt exists"). Real values arrive with the checkout/Stripe branch.
+  // Read from the order's one SUCCEEDED payments row (business-invariants.md), never derived
+  // from an in-flight PENDING/FAILED attempt — null until a payment has actually succeeded.
   paymentMethod: string | null;
   promoCode: string | null;
   deliveryPersonId: string | null;
@@ -35,7 +36,7 @@ export class OrderSummaryResponseDto {
     this.totalCents = source.totalCents;
     this.currency = source.currency;
     this.itemCount = source.itemCount;
-    this.paymentMethod = null;
+    this.paymentMethod = source.paymentMethod;
     this.promoCode = source.promoCode;
     this.deliveryPersonId = source.deliveryPersonId;
   }
