@@ -17,13 +17,13 @@ architecture write-up the challenge requires.
 
 - NestJS 11, TypeScript, Prisma ORM 7 (`prisma-client` generator, CommonJS output,
   `@prisma/adapter-pg`), PostgreSQL 16 + Redis via Docker Compose for local dev.
-- `prisma/schema.prisma` has `User`, `RefreshToken`, `PasswordResetToken` (Auth); `Category`,
-  `Product`, `ProductCategory`, `Color`, `Size`, `ProductVariant`, `ProductImage` (Catalog);
-  `Cart`, `CartItem`, `ProductLike` (Engagement); and `PromoCode` (Promo) — Sales
-  (`orders`/`order_items`/`order_status_history`/`payments`/`stripe_events`) and
-  `promo_redemptions` (blocked on `orders` existing first, per its FK) are still unmodeled.
-  `docs/reference/erd/T-Shirt.dbml` stays canonical; the schema is a partial, in-progress mapping
-  of it, not a substitute for it.
+- `prisma/schema.prisma` fully models all 20 tables in `docs/reference/erd/T-Shirt.dbml`: `User`,
+  `RefreshToken`, `PasswordResetToken` (Auth); `Category`, `Product`, `ProductCategory`, `Color`,
+  `Size`, `ProductVariant`, `ProductImage` (Catalog); `Cart`, `CartItem`, `ProductLike`
+  (Engagement); `Order`, `OrderItem`, `OrderStatusHistory`, `Payment`, `StripeEvent` (Sales); and
+  `PromoCode`, `PromoRedemption` (Promo) — verified model-by-model against the DBML, no drift.
+  `docs/reference/erd/T-Shirt.dbml` stays canonical; any further schema change needs the matching
+  DBML edit in the same slice (see the non-negotiable process rule below).
 - `src/` has `AuthModule` (signup/signin/refresh/signout/forgot-password/reset-password/`/me`,
   JWT + Passport, bcrypt for passwords, SHA-256 for token-table lookups), `EmailModule`
   (BullMQ-backed; `EmailService` is bound to `BrevoEmailService`, sending real transactional
@@ -33,18 +33,22 @@ architecture write-up the challenge requires.
   product images all support the full CRUD `openapi.yaml` documents, MANAGER-gated via
   `RolesGuard`; images are stored in S3 via `S3ImageStorageService`, needs
   `AWS_REGION`/`AWS_S3_BUCKET`/`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in `.env`),
-  `EngagementModule` (cart and product likes, CLIENT-gated via `RolesGuard`), and `PromoModule`
+  `EngagementModule` (cart and product likes, CLIENT-gated via `RolesGuard`), `PromoModule`
   (promo code CRUD + `/promo-codes/validate`, MANAGER/CLIENT-gated — usage-based status
-  (`EXHAUSTED`) always reads as unreachable today, since it depends on `promo_redemptions`,
-  which Sales hasn't added yet). Sales from `docs/conventions/coding-style.md`'s table is still
-  unbuilt.
+  (`EXHAUSTED`) is reachable today: it counts real `PromoRedemption` rows), and `SalesModule`
+  (`src/sales/`: orders list/detail/status-transition/cancel, cart checkout via
+  `POST /orders` + `POST /checkout/payment-intent`, direct `POST /checkout/payment-link`, the
+  Stripe webhook, and a BullMQ-backed refund queue — CLIENT/MANAGER/DELIVERY-gated per action via
+  `RolesGuard`, with `@casl/ability` layered on top for per-order (own-resource) abilities; see
+  `docs/conventions/coding-style.md`'s "Authorization current state").
 - `openapi.yaml` is the real, current API contract (also published on SwaggerHub). The API is
   served under a global `/v1` prefix (set in `src/main.ts`). Helmet and CORS are enabled globally
   (`src/app.config.ts`, shared between `main.ts` and e2e tests so both configure the app
   identically).
-- `@nestjs/bullmq` (BullMQ on Redis) is installed and wired for the two email jobs above. CASL
-  (authorization) is still decided but not installed — see `docs/conventions/coding-style.md`.
-  No separate worker process exists yet; queue jobs run in-process with the API.
+- `@nestjs/bullmq` (BullMQ on Redis) is installed and wired for the two email jobs above and for
+  Sales's refund-on-cancellation job. `@casl/ability` is installed and used in `SalesModule` (see
+  above) — `docs/conventions/coding-style.md` has the exact scope. No separate worker process
+  exists yet; queue jobs run in-process with the API.
 
 ## Commands
 
