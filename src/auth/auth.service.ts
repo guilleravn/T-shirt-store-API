@@ -113,11 +113,20 @@ export class AuthService {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
+    if (existing.expiresAt <= new Date()) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
     return this.prisma.$transaction(async (tx) => {
       // Conditional UPDATE, not read-then-write: guards two concurrent /auth/refresh calls
-      // racing on the same row, same idiom R3 uses for stock.
+      // racing on the same row (same idiom R3 uses for stock), and closes the window where the
+      // token expires between the pre-check above and this write.
       const { count } = await tx.refreshToken.updateMany({
-        where: { id: existing.id, revokedAt: null },
+        where: {
+          id: existing.id,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
         data: { revokedAt: new Date() },
       });
       if (count !== 1) {
