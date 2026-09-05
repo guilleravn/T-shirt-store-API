@@ -3,7 +3,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { DiscountType, Prisma } from '../../generated/prisma/client';
+import {
+  DiscountType,
+  OrderStatus,
+  Prisma,
+} from '../../generated/prisma/client';
 import { PageMetaDto } from '../catalog/dto/page-meta.dto';
 import { mapPrismaWriteError } from '../common/prisma-error.util';
 import { PrismaService } from '../prisma/prisma.service';
@@ -82,9 +86,19 @@ export class PromoCodesService {
       }),
     ]);
 
+    // One groupBy for the whole page instead of a countRedemptions() call per row — up to 100
+    // extra queries per page (ListPromoCodesQueryDto.limit's max) for what's otherwise identical
+    // R5 semantics (redemptions joined to non-CANCELLED orders, never a stored counter).
+    const usageCounts = await this.countRedemptionsByPromoCode(
+      promoCodes.map((promoCode) => promoCode.id),
+    );
+
     return {
-      data: await Promise.all(
-        promoCodes.map((promoCode) => this.toResponseDto(promoCode)),
+      data: promoCodes.map((promoCode) =>
+        this.toResponseDtoWithCount(
+          promoCode,
+          usageCounts.get(promoCode.id) ?? 0,
+        ),
       ),
       meta: new PageMetaDto({ total, limit, offset }),
     };
@@ -253,6 +267,25 @@ export class PromoCodesService {
     });
   }
 
+  // Same R5 semantics as countRedemptions, batched for a whole page of promo codes in one query
+  // instead of one countRedemptions() call per row.
+  private async countRedemptionsByPromoCode(
+    promoCodeIds: string[],
+  ): Promise<Map<string, number>> {
+    if (promoCodeIds.length === 0) {
+      return new Map();
+    }
+    const grouped = await this.prisma.promoRedemption.groupBy({
+      by: ['promoCodeId'],
+      where: {
+        promoCodeId: { in: promoCodeIds },
+        order: { status: { not: OrderStatus.CANCELLED } },
+      },
+      _count: { _all: true },
+    });
+    return new Map(grouped.map((row) => [row.promoCodeId, row._count._all]));
+  }
+
   private computeStatus(
     promoCode: StoredPromoCode,
     usageCount: number,
@@ -273,6 +306,13 @@ export class PromoCodesService {
     promoCode: StoredPromoCode,
   ): Promise<PromoCodeResponseDto> {
     const usageCount = await this.countRedemptions(promoCode.id);
+    return this.toResponseDtoWithCount(promoCode, usageCount);
+  }
+
+  private toResponseDtoWithCount(
+    promoCode: StoredPromoCode,
+    usageCount: number,
+  ): PromoCodeResponseDto {
     return new PromoCodeResponseDto({
       id: promoCode.id,
       code: promoCode.code,

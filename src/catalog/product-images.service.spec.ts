@@ -254,5 +254,17 @@ describe('ProductImagesService', () => {
       expect(storage.delete).toHaveBeenCalledWith(image.s3Key);
       expect(callOrder).toEqual(['db', 's3']);
     });
+
+    it('still resolves when the S3 delete fails, since the DB row is already gone', async () => {
+      const image = buildImage();
+      prisma.productImage.findFirst.mockResolvedValue(image);
+      prisma.productImage.delete.mockResolvedValue(image);
+      storage.delete.mockRejectedValue(new Error('S3 unavailable'));
+
+      await expect(service.remove('prod-1', 'img-1')).resolves.toBeUndefined();
+      expect(prisma.productImage.delete).toHaveBeenCalledWith({
+        where: { id: 'img-1' },
+      });
+    });
   });
 });

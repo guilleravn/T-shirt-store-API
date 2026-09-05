@@ -35,6 +35,7 @@ function buildPrismaMock() {
       findUnique: jest.fn(),
       updateMany: jest.fn(),
     },
+    $executeRaw: jest.fn(),
     $transaction: jest.fn(),
   };
   // Every test reuses the same mock as the transaction client — this is a unit test of
@@ -189,7 +190,11 @@ describe('AuthService', () => {
       expect(result.accessToken).toBe('signed.jwt.token');
       expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: existing.id, revokedAt: null },
+          where: {
+            id: existing.id,
+            revokedAt: null,
+            expiresAt: { gt: expect.any(Date) as Date },
+          },
         }),
       );
     });
@@ -199,6 +204,49 @@ describe('AuthService', () => {
 
       await expect(service.refresh({ refreshToken: 'nope' })).rejects.toThrow(
         UnauthorizedException,
+      );
+    });
+
+    it('rejects an expired token before even opening the transaction', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        id: 'rt-1',
+        userId: baseUser.id,
+        tokenHash: hashToken('raw-token'),
+        revokedAt: null,
+        expiresAt: new Date(Date.now() - 1000),
+        createdAt: new Date(),
+      });
+
+      await expect(
+        service.refresh({ refreshToken: 'raw-token' }),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('closes the row on rotation with an expiresAt-in-the-future condition, not just id/revokedAt', async () => {
+      const existing = {
+        id: 'rt-1',
+        userId: baseUser.id,
+        tokenHash: hashToken('raw-token'),
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 1000),
+        createdAt: new Date(),
+      };
+      prisma.refreshToken.findUnique.mockResolvedValue(existing);
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+      prisma.user.findUnique.mockResolvedValue(baseUser);
+      prisma.refreshToken.create.mockResolvedValue({});
+
+      await service.refresh({ refreshToken: 'raw-token' });
+
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            id: existing.id,
+            revokedAt: null,
+            expiresAt: { gt: expect.any(Date) as Date },
+          },
+        }),
       );
     });
 
@@ -315,6 +363,16 @@ describe('AuthService', () => {
       expect(emailQueueService.enqueuePasswordResetEmail).toHaveBeenCalledWith(
         expect.objectContaining({ to: baseUser.email }),
       );
+    });
+
+    it('takes a per-account advisory lock before counting, to close the concurrent-request race', async () => {
+      prisma.user.findUnique.mockResolvedValue(baseUser);
+      prisma.passwordResetToken.count.mockResolvedValue(0);
+      prisma.passwordResetToken.create.mockResolvedValue({});
+
+      await service.forgotPassword({ email: baseUser.email });
+
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
     });
 
     it('stops silently once the per-account rate limit (3/hour) is hit', async () => {

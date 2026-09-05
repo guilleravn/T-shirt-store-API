@@ -27,6 +27,7 @@ function buildPrismaMock() {
       count: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
     },
     cart: { findUnique: jest.fn() },
     cartItem: { findMany: jest.fn() },
@@ -43,6 +44,7 @@ function buildPrismaMock() {
     (callback: (tx: typeof prisma) => unknown) => callback(prisma),
   );
   prisma.payment.findFirst.mockResolvedValue(null);
+  prisma.order.updateMany.mockResolvedValue({ count: 1 });
   return prisma;
 }
 
@@ -538,10 +540,40 @@ describe('OrdersService', () => {
         { status: OrderStatus.PROCESSING },
       );
 
-      expect(prisma.order.update).toHaveBeenCalledWith({
-        where: { id: 'order-1' },
+      expect(prisma.order.updateMany).toHaveBeenCalledWith({
+        where: { id: 'order-1', status: OrderStatus.PAID },
         data: { status: OrderStatus.PROCESSING },
       });
+    });
+
+    it('throws ConflictException when the status changed concurrently between the pre-check and the write', async () => {
+      prisma.order.findUnique.mockResolvedValue(
+        buildOrder({ status: OrderStatus.PAID }),
+      );
+      prisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.updateStatus('order-1', buildUser({ role: UserRole.MANAGER }), {
+          status: OrderStatus.PROCESSING,
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.orderStatusHistory.create).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when MANAGER attempts the DELIVERY-only SHIPPED -> DELIVERED transition', async () => {
+      prisma.order.findUnique.mockResolvedValue(
+        buildOrder({
+          status: OrderStatus.SHIPPED,
+          deliveryPersonId: 'delivery-1',
+        }),
+      );
+
+      await expect(
+        service.updateStatus('order-1', buildUser({ role: UserRole.MANAGER }), {
+          status: OrderStatus.DELIVERED,
+        }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('rejects PENDING -> SHIPPED as an invalid transition', async () => {
@@ -575,8 +607,8 @@ describe('OrdersService', () => {
       expect(prisma.user.findFirst).toHaveBeenCalledWith({
         where: { id: 'delivery-1', role: UserRole.DELIVERY },
       });
-      expect(prisma.order.update).toHaveBeenCalledWith({
-        where: { id: 'order-1' },
+      expect(prisma.order.updateMany).toHaveBeenCalledWith({
+        where: { id: 'order-1', status: OrderStatus.PROCESSING },
         data: { status: OrderStatus.SHIPPED, deliveryPersonId: 'delivery-1' },
       });
     });
@@ -617,8 +649,8 @@ describe('OrdersService', () => {
         { status: OrderStatus.DELIVERED },
       );
 
-      expect(prisma.order.update).toHaveBeenCalledWith({
-        where: { id: 'order-1' },
+      expect(prisma.order.updateMany).toHaveBeenCalledWith({
+        where: { id: 'order-1', status: OrderStatus.SHIPPED },
         data: { status: OrderStatus.DELIVERED },
       });
     });
@@ -679,10 +711,29 @@ describe('OrdersService', () => {
         { reason: 'changed my mind' },
       );
 
-      expect(prisma.order.update).toHaveBeenCalledWith({
-        where: { id: 'order-1' },
+      expect(prisma.order.updateMany).toHaveBeenCalledWith({
+        where: { id: 'order-1', status: OrderStatus.PENDING },
         data: { status: OrderStatus.CANCELLED },
       });
+    });
+
+    it('throws ConflictException when it loses the race to cancel the row concurrently', async () => {
+      prisma.order.findUnique.mockResolvedValue(
+        buildOrder({ status: OrderStatus.PENDING }),
+      );
+      prisma.order.findUniqueOrThrow.mockResolvedValue(
+        buildOrder({ status: OrderStatus.PENDING }),
+      );
+      prisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.cancel(
+          'order-1',
+          buildUser({ id: 'user-1', role: UserRole.CLIENT }),
+          {},
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.orderStatusHistory.create).not.toHaveBeenCalled();
     });
 
     it('rejects cancelling an already-SHIPPED order', async () => {
@@ -858,7 +909,7 @@ describe('OrdersService', () => {
           {},
         ),
       ).rejects.toBeInstanceOf(ConflictException);
-      expect(prisma.order.update).not.toHaveBeenCalled();
+      expect(prisma.order.updateMany).not.toHaveBeenCalled();
     });
 
     it('enqueues a refund when a SUCCEEDED payment exists for the cancelled order', async () => {

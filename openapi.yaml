@@ -302,8 +302,8 @@ paths:
         '401':
           description: 'includeInactive=true with no token'
           content:
-            application/problem+json:
-              { schema: { $ref: '#/components/schemas/Problem' } }
+            application/json:
+              { schema: { $ref: '#/components/schemas/HttpError' } }
         '403':
           description: "includeInactive=true with a role that isn't MANAGER"
           $ref: '#/components/responses/Forbidden'
@@ -853,6 +853,7 @@ paths:
                   currency: { type: string }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
@@ -1288,131 +1289,104 @@ components:
     BadRequest:
       description: Invalid data
       content:
-        application/problem+json:
-          schema: { $ref: '#/components/schemas/Problem' }
+        application/json:
+          schema: { $ref: '#/components/schemas/HttpError' }
           example:
-            type: 'https://api.tshirtstore.com/errors/validation'
-            title: 'Validation failed'
-            status: 400
-            detail: 'One or more fields are invalid'
-            code: 'VALIDATION_ERROR'
-            requestId: '01J9Z0000000000000000001'
-            errors: [{ field: 'field', message: 'reason for the error' }]
+            statusCode: 400
+            message:
+              [
+                'email must be an email',
+                'password must be longer than or equal to 10 characters',
+              ]
+            error: 'Bad Request'
     Unauthorized:
       description: No valid credential
       content:
-        application/problem+json:
-          schema: { $ref: '#/components/schemas/Problem' }
+        application/json:
+          schema: { $ref: '#/components/schemas/HttpError' }
           example:
-            type: 'https://api.tshirtstore.com/errors/unauthorized'
-            title: 'Unauthorized'
-            status: 401
-            detail: 'The request could not be authenticated'
-            code: 'UNAUTHORIZED'
-            requestId: '01J9Z0000000000000000002'
+            statusCode: 401
+            message: 'Invalid email or password'
+            error: 'Unauthorized'
     Forbidden:
       description: Role has no permission on this resource
       content:
-        application/problem+json:
-          schema: { $ref: '#/components/schemas/Problem' }
+        application/json:
+          schema: { $ref: '#/components/schemas/HttpError' }
           example:
-            type: 'https://api.tshirtstore.com/errors/forbidden'
-            title: 'Forbidden'
-            status: 403
-            detail: "You don't have permission for this action"
-            code: 'FORBIDDEN'
-            requestId: '01J9Z0000000000000000003'
+            statusCode: 403
+            message: "You don't have permission for this action"
+            error: 'Forbidden'
     NotFound:
       description: Doesn't exist, or isn't visible to whoever is asking
       content:
-        application/problem+json:
-          schema: { $ref: '#/components/schemas/Problem' }
+        application/json:
+          schema: { $ref: '#/components/schemas/HttpError' }
           example:
-            type: 'https://api.tshirtstore.com/errors/not-found'
-            title: 'Not Found'
-            status: 404
-            detail: "The resource doesn't exist"
-            code: 'NOT_FOUND'
-            requestId: '01J9Z0000000000000000004'
+            statusCode: 404
+            message: 'Product not found'
+            error: 'Not Found'
     Conflict:
       description: The current state doesn't allow this operation
       content:
-        application/problem+json:
-          schema: { $ref: '#/components/schemas/Problem' }
+        application/json:
+          schema: { $ref: '#/components/schemas/HttpError' }
           example:
-            type: 'https://api.tshirtstore.com/errors/conflict'
-            title: 'Conflict'
-            status: 409
-            detail: "This operation isn't valid right now"
-            code: 'CONFLICT'
-            requestId: '01J9Z0000000000000000005'
+            statusCode: 409
+            message: 'You already have a pending order'
+            error: 'Conflict'
     TooManyRequests:
       description: Rate limit exceeded
       content:
-        application/problem+json:
-          schema: { $ref: '#/components/schemas/Problem' }
+        application/json:
+          schema: { $ref: '#/components/schemas/HttpError' }
           example:
-            type: 'https://api.tshirtstore.com/errors/rate-limited'
-            title: 'Too Many Requests'
-            status: 429
-            detail: 'Too many attempts, please wait a moment'
-            code: 'RATE_LIMITED'
-            requestId: '01J9Z0000000000000000006'
+            statusCode: 429
+            message: 'ThrottlerException: Too Many Requests'
+            error: 'Too Many Requests'
     PayloadTooLarge:
       description: File too large
       content:
-        application/problem+json:
-          schema: { $ref: '#/components/schemas/Problem' }
+        application/json:
+          schema: { $ref: '#/components/schemas/HttpError' }
           example:
-            type: 'https://api.tshirtstore.com/errors/payload-too-large'
-            title: 'Payload Too Large'
-            status: 413
-            detail: 'The file exceeds the maximum size'
-            code: 'FILE_TOO_LARGE'
-            requestId: '01J9Z0000000000000000007'
+            statusCode: 413
+            message: 'Image must be 5MB or smaller'
+            error: 'Payload Too Large'
     UnsupportedMediaType:
       description: Unsupported file type
       content:
-        application/problem+json:
-          schema: { $ref: '#/components/schemas/Problem' }
+        application/json:
+          schema: { $ref: '#/components/schemas/HttpError' }
           example:
-            type: 'https://api.tshirtstore.com/errors/unsupported-media-type'
-            title: 'Unsupported Media Type'
-            status: 415
-            detail: "This file type isn't allowed"
-            code: 'UNSUPPORTED_MEDIA_TYPE'
-            requestId: '01J9Z0000000000000000008'
+            statusCode: 415
+            message: 'Only JPEG, PNG, or WEBP images are allowed'
+            error: 'Unsupported Media Type'
     ServiceUnavailable:
       description: An external dependency is down
       content:
-        application/problem+json:
-          schema: { $ref: '#/components/schemas/Problem' }
+        application/json:
+          schema: { $ref: '#/components/schemas/HttpError' }
           example:
-            type: 'https://api.tshirtstore.com/errors/service-unavailable'
-            title: 'Service Unavailable'
-            status: 503
-            detail: "The service isn't responding, please try again in a few minutes"
-            code: 'SERVICE_UNAVAILABLE'
-            requestId: '01J9Z0000000000000000009'
+            statusCode: 503
+            message: "The service isn't responding, please try again in a few minutes"
+            error: 'Service Unavailable'
 
   schemas:
-    Problem:
+    HttpError:
+      description: Nest's default HTTP exception shape — every 4xx/5xx response uses this, unmodified.
       type: object
       properties:
-        type: { type: string }
-        title: { type: string }
-        status: { type: integer }
-        detail: { type: string }
-        instance: { type: string }
-        code: { type: string }
-        requestId: { type: string }
-        errors:
-          type: array
-          items:
-            type: object
-            properties:
-              field: { type: string }
-              message: { type: string }
+        statusCode: { type: integer }
+        message:
+          description: A single string, except ValidationPipe's own failures, which report one string per invalid field.
+          type: [string, array]
+          items: { type: string }
+        error:
+          {
+            type: string,
+            description: 'The standard HTTP reason phrase for statusCode, e.g. "Not Found", "Conflict".',
+          }
 
     PageMeta:
       type: object

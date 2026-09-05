@@ -1,8 +1,16 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export class ValidatePromoCodeDto {
   @IsString()
+  @MaxLength(40)
   code: string;
 
   @IsOptional()

@@ -91,6 +91,11 @@ describe('Checkout (e2e)', () => {
   });
 
   afterAll(async () => {
+    // Never cleaned up before this fix — the webhook test below inserts a real stripe_events
+    // row, and every run of this suite left one behind permanently.
+    await prisma.stripeEvent.deleteMany({
+      where: { stripeEventId: { endsWith: `_${suffix}` } },
+    });
     await prisma.payment.deleteMany({
       where: { order: { userId: { in: createdUserIds } } },
     });
@@ -143,7 +148,7 @@ describe('Checkout (e2e)', () => {
 
   function signedPaymentIntentSucceededEvent(orderId: string, piId: string) {
     const payload = JSON.stringify({
-      id: `evt_e2e_checkout_${randomUUID().slice(0, 8)}`,
+      id: `evt_e2e_checkout_${suffix}`,
       object: 'event',
       type: 'payment_intent.succeeded',
       data: {

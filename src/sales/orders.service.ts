@@ -59,6 +59,18 @@ const CANCELLABLE_STATUSES: OrderStatus[] = [
   OrderStatus.PROCESSING,
 ];
 
+// The two failure modes below are deliberately distinct HTTP statuses (openapi.yaml documents
+// both 403 and 409 for PATCH /orders/{id}/status): a pair with no entry here is unreachable from
+// any role (409 — the resource's state doesn't allow it), while a pair that IS here but whose
+// role doesn't match is reachable, just not by this caller (403).
+const STATUS_TRANSITIONS: Partial<
+  Record<OrderStatus, Partial<Record<OrderStatus, UserRole>>>
+> = {
+  [OrderStatus.PAID]: { [OrderStatus.PROCESSING]: UserRole.MANAGER },
+  [OrderStatus.PROCESSING]: { [OrderStatus.SHIPPED]: UserRole.MANAGER },
+  [OrderStatus.SHIPPED]: { [OrderStatus.DELIVERED]: UserRole.DELIVERY },
+};
+
 // user/deliveryPerson are `select`, never `include: true` — openapi.yaml's OrderDetail.customer
 // and .deliveryPerson only ever expose {id, firstName, lastName}, and TypeScript's DTO typing
 // doesn't strip a full User row (with passwordHash) assigned into it at runtime.
@@ -332,8 +344,14 @@ export class OrdersService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.order.update({
-        where: { id: orderId },
+      // Conditional on the status this was validated against, not a plain update — closes the
+      // race between the pre-check above and this write (same idiom as R3's stock UPDATE and
+      // auth.service.ts's refresh-token rotation). Without it, two concurrent requests can both
+      // pass assertValidTransition against the same stale status and both write, leaving
+      // order_status_history with an entry for a transition that was no longer actually legal by
+      // the time it ran.
+      const { count } = await tx.order.updateMany({
+        where: { id: orderId, status: order.status },
         data: {
           status: dto.status,
           // R7: delivery_person_id is set exactly at the PROCESSING -> SHIPPED transition, in
@@ -343,6 +361,11 @@ export class OrdersService {
           }),
         },
       });
+      if (count === 0) {
+        throw new ConflictException(
+          'Order status changed concurrently, please retry',
+        );
+      }
       await tx.orderStatusHistory.create({
         data: {
           orderId,
@@ -386,10 +409,18 @@ export class OrdersService {
         throw new ConflictException('Order can no longer be cancelled');
       }
 
-      await tx.order.update({
-        where: { id: orderId },
+      // Conditional on the status just read, not a plain update — this is what makes the write
+      // itself acquire the row lock atomically with the check above. It's also what
+      // checkout.service.ts's createPaymentIntent relies on: its own SELECT ... FOR UPDATE only
+      // closes its half of that race if this side's write is guaranteed to wait on the same lock
+      // instead of writing straight past it.
+      const { count } = await tx.order.updateMany({
+        where: { id: orderId, status: currentOrder.status },
         data: { status: OrderStatus.CANCELLED },
       });
+      if (count === 0) {
+        throw new ConflictException('Order can no longer be cancelled');
+      }
       await tx.orderStatusHistory.create({
         data: {
           orderId,
@@ -478,26 +509,21 @@ export class OrdersService {
   }
 
   // Service-level business rule, not a guard's or CASL's concern (coding-style.md's dividing
-  // line): whether THIS status is reachable from the order's CURRENT status by THIS role.
+  // line): whether THIS status is reachable from the order's CURRENT status, and whether THIS
+  // role is the one allowed to make that specific move.
   private assertValidTransition(
     current: OrderStatus,
     target: OrderStatus,
     role: UserRole,
   ): void {
-    const valid =
-      (current === OrderStatus.PAID &&
-        target === OrderStatus.PROCESSING &&
-        role === UserRole.MANAGER) ||
-      (current === OrderStatus.PROCESSING &&
-        target === OrderStatus.SHIPPED &&
-        role === UserRole.MANAGER) ||
-      (current === OrderStatus.SHIPPED &&
-        target === OrderStatus.DELIVERED &&
-        role === UserRole.DELIVERY);
-    if (!valid) {
+    const requiredRole = STATUS_TRANSITIONS[current]?.[target];
+    if (!requiredRole) {
       throw new ConflictException(
         `Cannot transition from ${current} to ${target}`,
       );
+    }
+    if (requiredRole !== role) {
+      throw new ForbiddenException("You don't have permission for this action");
     }
   }
 }

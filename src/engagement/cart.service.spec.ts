@@ -5,7 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CartItemIssue } from './dto/cart-item-response.dto';
 
 function buildPrismaMock() {
-  return {
+  const prisma = {
     cart: {
       upsert: jest.fn(),
       findUnique: jest.fn(),
@@ -19,9 +19,15 @@ function buildPrismaMock() {
       findUnique: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
+      upsert: jest.fn(),
       deleteMany: jest.fn(),
     },
+    $transaction: jest.fn(),
   };
+  prisma.$transaction.mockImplementation(
+    (callback: (tx: typeof prisma) => unknown) => callback(prisma),
+  );
+  return prisma;
 }
 
 const color = { id: 'col-1', name: 'Black', hexCode: '#000000' };
@@ -164,67 +170,74 @@ describe('CartService', () => {
       prisma.productVariant.findFirst.mockResolvedValue(
         buildVariant({ product: { isActive: false, deletedAt: null } }),
       );
-      prisma.cartItem.findUnique.mockResolvedValue(null);
+      prisma.cartItem.upsert.mockResolvedValue({ id: 'item-1', quantity: 1 });
 
       await expect(
         service.addItem('user-1', { productVariantId: 'var-1', quantity: 1 }),
       ).rejects.toBeInstanceOf(ConflictException);
-      expect(prisma.cartItem.create).not.toHaveBeenCalled();
     });
 
     it('throws ConflictException when requesting more than the available stock', async () => {
       prisma.productVariant.findFirst.mockResolvedValue(
         buildVariant({ stock: 3 }),
       );
-      prisma.cartItem.findUnique.mockResolvedValue(null);
+      prisma.cartItem.upsert.mockResolvedValue({ id: 'item-1', quantity: 5 });
 
       await expect(
         service.addItem('user-1', { productVariantId: 'var-1', quantity: 5 }),
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
-    it('creates a new line when the variant is not already in the cart', async () => {
+    it('upserts a new line when the variant is not already in the cart', async () => {
       prisma.productVariant.findFirst.mockResolvedValue(buildVariant());
-      prisma.cartItem.findUnique.mockResolvedValue(null);
+      prisma.cartItem.upsert.mockResolvedValue({ id: 'item-1', quantity: 3 });
 
       await service.addItem('user-1', {
         productVariantId: 'var-1',
         quantity: 3,
       });
 
-      expect(prisma.cartItem.create).toHaveBeenCalledWith({
-        data: { cartId: 'cart-1', productVariantId: 'var-1', quantity: 3 },
+      expect(prisma.cartItem.upsert).toHaveBeenCalledWith({
+        where: {
+          cartId_productVariantId: {
+            cartId: 'cart-1',
+            productVariantId: 'var-1',
+          },
+        },
+        create: { cartId: 'cart-1', productVariantId: 'var-1', quantity: 3 },
+        update: { quantity: { increment: 3 } },
       });
-      expect(prisma.cartItem.update).not.toHaveBeenCalled();
     });
 
     it('increments the existing line instead of creating a duplicate', async () => {
       prisma.productVariant.findFirst.mockResolvedValue(buildVariant());
-      prisma.cartItem.findUnique.mockResolvedValue({
-        id: 'item-1',
-        quantity: 2,
-      });
+      // Simulates Postgres's ON CONFLICT DO UPDATE actually applying the increment (2 existing + 3
+      // requested) — the service never reads the pre-write quantity itself.
+      prisma.cartItem.upsert.mockResolvedValue({ id: 'item-1', quantity: 5 });
 
       await service.addItem('user-1', {
         productVariantId: 'var-1',
         quantity: 3,
       });
 
-      expect(prisma.cartItem.update).toHaveBeenCalledWith({
-        where: { id: 'item-1' },
-        data: { quantity: 5 },
+      expect(prisma.cartItem.upsert).toHaveBeenCalledWith({
+        where: {
+          cartId_productVariantId: {
+            cartId: 'cart-1',
+            productVariantId: 'var-1',
+          },
+        },
+        create: { cartId: 'cart-1', productVariantId: 'var-1', quantity: 3 },
+        update: { quantity: { increment: 3 } },
       });
-      expect(prisma.cartItem.create).not.toHaveBeenCalled();
     });
 
     it('rejects an increment that would exceed available stock', async () => {
       prisma.productVariant.findFirst.mockResolvedValue(
         buildVariant({ stock: 4 }),
       );
-      prisma.cartItem.findUnique.mockResolvedValue({
-        id: 'item-1',
-        quantity: 3,
-      });
+      // 3 existing + 2 requested = 5, over the stock of 4.
+      prisma.cartItem.upsert.mockResolvedValue({ id: 'item-1', quantity: 5 });
 
       await expect(
         service.addItem('user-1', { productVariantId: 'var-1', quantity: 2 }),

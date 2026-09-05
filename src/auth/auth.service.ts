@@ -31,6 +31,7 @@ const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 const PASSWORD_RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
 // business-invariants.md security invariant: 3 requests/hour per account.
 const PASSWORD_RESET_MAX_PER_HOUR = 3;
+const BCRYPT_COST_FACTOR = 10;
 
 @Injectable()
 export class AuthService {
@@ -48,7 +49,7 @@ export class AuthService {
   }
 
   async signUp(dto: SignUpDto): Promise<UserResponseDto> {
-    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const passwordHash = await bcrypt.hash(dto.password, BCRYPT_COST_FACTOR);
 
     let user: User;
     try {
@@ -112,11 +113,20 @@ export class AuthService {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
+    if (existing.expiresAt <= new Date()) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
     return this.prisma.$transaction(async (tx) => {
       // Conditional UPDATE, not read-then-write: guards two concurrent /auth/refresh calls
-      // racing on the same row, same idiom R3 uses for stock.
+      // racing on the same row (same idiom R3 uses for stock), and closes the window where the
+      // token expires between the pre-check above and this write.
       const { count } = await tx.refreshToken.updateMany({
-        where: { id: existing.id, revokedAt: null },
+        where: {
+          id: existing.id,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
         data: { revokedAt: new Date() },
       });
       if (count !== 1) {
@@ -166,22 +176,36 @@ export class AuthService {
       return;
     }
 
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-    const recentCount = await this.prisma.passwordResetToken.count({
-      where: { userId: user.id, createdAt: { gte: oneHourAgo } },
+    const rawToken = await this.prisma.$transaction(async (tx) => {
+      // Serializes concurrent forgotPassword calls for the same account — without this, the
+      // count-then-create below is a plain read-then-write: two requests can both read a count
+      // under PASSWORD_RESET_MAX_PER_HOUR and both insert, landing above the documented cap
+      // (business-invariants.md's security invariants). pg_advisory_xact_lock is released
+      // automatically when the transaction ends, commit or rollback, so there's nothing to clean
+      // up on the early-return path below.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${user.id}))`;
+
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      const recentCount = await tx.passwordResetToken.count({
+        where: { userId: user.id, createdAt: { gte: oneHourAgo } },
+      });
+      if (recentCount >= PASSWORD_RESET_MAX_PER_HOUR) {
+        return null;
+      }
+
+      const token = generateRawToken();
+      await tx.passwordResetToken.create({
+        data: {
+          userId: user.id,
+          tokenHash: hashToken(token),
+          expiresAt: new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS),
+        },
+      });
+      return token;
     });
-    if (recentCount >= PASSWORD_RESET_MAX_PER_HOUR) {
+    if (!rawToken) {
       return;
     }
-
-    const rawToken = generateRawToken();
-    await this.prisma.passwordResetToken.create({
-      data: {
-        userId: user.id,
-        tokenHash: hashToken(rawToken),
-        expiresAt: new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS),
-      },
-    });
 
     await this.emailQueueService.enqueuePasswordResetEmail({
       to: user.email,
@@ -192,7 +216,7 @@ export class AuthService {
 
   async resetPassword(dto: ResetPasswordDto): Promise<void> {
     const tokenHash = hashToken(dto.token);
-    const passwordHash = await bcrypt.hash(dto.newPassword, 10);
+    const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_COST_FACTOR);
 
     const user = await this.prisma.$transaction(async (tx) => {
       const resetToken = await tx.passwordResetToken.findUnique({

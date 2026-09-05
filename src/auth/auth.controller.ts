@@ -33,6 +33,8 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('auth/signup')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60 * 1000 } })
   @HttpCode(HttpStatus.CREATED)
   signUp(@Body() dto: SignUpDto): Promise<UserResponseDto> {
     return this.authService.signUp(dto);

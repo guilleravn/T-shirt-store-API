@@ -181,6 +181,7 @@ describe('CheckoutService', () => {
     it('creates a new PaymentIntent and payment row when none exists yet', async () => {
       prisma.order.findUnique.mockResolvedValue(buildOrder());
       prisma.payment.findFirst.mockResolvedValue(null);
+      prisma.$queryRaw.mockResolvedValue([{ status: OrderStatus.PENDING }]);
       stripeService.createPaymentIntent.mockResolvedValue({
         id: 'pi_new',
         client_secret: 'secret_new',
@@ -228,6 +229,7 @@ describe('CheckoutService', () => {
     it('maps a duplicate payment-row race to a clear ConflictException', async () => {
       prisma.order.findUnique.mockResolvedValue(buildOrder());
       prisma.payment.findFirst.mockResolvedValue(null);
+      prisma.$queryRaw.mockResolvedValue([{ status: OrderStatus.PENDING }]);
       stripeService.createPaymentIntent.mockResolvedValue({
         id: 'pi_new',
         client_secret: 'secret_new',
@@ -242,6 +244,21 @@ describe('CheckoutService', () => {
       await expect(
         service.createPaymentIntent(buildUser(), { orderId: 'order-1' }),
       ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('throws ConflictException when the order was cancelled between the pre-check and the locked write (TOCTOU)', async () => {
+      prisma.order.findUnique.mockResolvedValue(buildOrder());
+      prisma.payment.findFirst.mockResolvedValue(null);
+      prisma.$queryRaw.mockResolvedValue([{ status: OrderStatus.CANCELLED }]);
+      stripeService.createPaymentIntent.mockResolvedValue({
+        id: 'pi_new',
+        client_secret: 'secret_new',
+      });
+
+      await expect(
+        service.createPaymentIntent(buildUser(), { orderId: 'order-1' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.payment.create).not.toHaveBeenCalled();
     });
   });
 

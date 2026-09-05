@@ -8,6 +8,7 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.config';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { AuthTokensResponseDto } from '../src/auth/dto/auth-tokens-response.dto';
+import { OrderStatus, UserRole } from '../generated/prisma/client';
 
 describe('Promo codes (e2e)', () => {
   let app: INestApplication<App>;
@@ -66,6 +67,72 @@ describe('Promo codes (e2e)', () => {
         .set('Authorization', `Bearer ${managerToken}`)
         .send({ discountValue: 500 })
         .expect(400);
+    });
+  });
+
+  // fix(promo): list() batches usage counts in one groupBy instead of one count() per row —
+  // verified against the real database since Prisma's groupBy-with-a-relation-where is exactly
+  // the kind of query shape a mocked unit test can't confirm actually compiles and joins right.
+  describe('GET /promo-codes usage counting (groupBy regression)', () => {
+    const code = `E2E-USAGE-${randomUUID().slice(0, 8)}`;
+    let promoCodeId: string;
+    let orderId: string;
+    let userId: string;
+
+    beforeAll(async () => {
+      const createResponse = await request(app.getHttpServer())
+        .post('/v1/promo-codes')
+        .set('Authorization', `Bearer ${managerToken}`)
+        .send({ code, discountType: 'FIXED', discountValue: 500 })
+        .expect(201);
+      promoCodeId = (createResponse.body as { id: string }).id;
+
+      const user = await prisma.user.create({
+        data: {
+          email: `e2e-promo-usage-${randomUUID().slice(0, 8)}@example.com`,
+          passwordHash: 'not-a-real-hash',
+          firstName: 'E2E',
+          lastName: 'PromoUsage',
+          role: UserRole.CLIENT,
+        },
+      });
+      userId = user.id;
+
+      const order = await prisma.order.create({
+        data: {
+          userId,
+          status: OrderStatus.PENDING,
+          subtotalCents: 1000,
+          discountCents: 500,
+          totalCents: 500,
+          statusHistory: {
+            create: { status: OrderStatus.PENDING, changedByUserId: userId },
+          },
+        },
+      });
+      orderId = order.id;
+
+      await prisma.promoRedemption.create({ data: { promoCodeId, orderId } });
+    });
+
+    afterAll(async () => {
+      await prisma.promoRedemption.deleteMany({ where: { promoCodeId } });
+      await prisma.order.deleteMany({ where: { id: orderId } });
+      await prisma.user.deleteMany({ where: { id: userId } });
+      await prisma.promoCode.deleteMany({ where: { id: promoCodeId } });
+    });
+
+    it('counts the redemption via the batched groupBy query', async () => {
+      const response = await request(app.getHttpServer())
+        .get(`/v1/promo-codes?code=${code}`)
+        .set('Authorization', `Bearer ${managerToken}`)
+        .expect(200);
+
+      const body = response.body as {
+        data: { code: string; timesUsed: number }[];
+      };
+      expect(body.data).toHaveLength(1);
+      expect(body.data[0].timesUsed).toBe(1);
     });
   });
 });

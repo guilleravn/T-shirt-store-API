@@ -5,6 +5,7 @@ import {
   IsUrl,
   IsUUID,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -19,6 +20,7 @@ export class CreatePaymentLinkDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(40)
   promoCode?: string;
 
   @IsOptional()

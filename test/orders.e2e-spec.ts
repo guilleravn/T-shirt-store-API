@@ -6,7 +6,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { OrdersService } from '../src/sales/orders.service';
 import { OrderAbilityFactory } from '../src/sales/casl/order-ability.factory';
 import { CheckoutQueueService } from '../src/sales/queue/checkout-queue.service';
-import { UserRole } from '../generated/prisma/client';
+import { OrderStatus, UserRole } from '../generated/prisma/client';
 
 describe('OrdersService (e2e, real database)', () => {
   let app: INestApplication;
@@ -150,6 +150,89 @@ describe('OrdersService (e2e, real database)', () => {
         where: { userId, status: 'PENDING' },
       });
       expect(pendingCount).toBe(1);
+    });
+  });
+
+  describe('updateStatus() race (fix: conditional write on the pre-checked status)', () => {
+    let userId: string;
+    let managerId: string;
+    let orderId: string;
+
+    afterAll(async () => {
+      await prisma.order.deleteMany({ where: { id: orderId } });
+      await prisma.user.deleteMany({
+        where: { id: { in: [userId, managerId] } },
+      });
+    });
+
+    it('lets exactly one of two simultaneous PAID -> PROCESSING calls on the same order succeed', async () => {
+      const user = await createFixtureUser('status-race');
+      userId = user.id;
+
+      const manager = await prisma.user.create({
+        data: {
+          email: `e2e-ord-status-race-manager-${suffix}@example.com`,
+          passwordHash: 'not-a-real-hash',
+          firstName: 'E2E',
+          lastName: 'Manager',
+          role: UserRole.MANAGER,
+        },
+      });
+      managerId = manager.id;
+
+      const order = await prisma.order.create({
+        data: {
+          userId: user.id,
+          status: OrderStatus.PAID,
+          subtotalCents: 1500,
+          discountCents: 0,
+          totalCents: 1500,
+          items: {
+            create: [
+              {
+                productVariantId: variantId,
+                quantity: 1,
+                unitPriceCents: 1500,
+                productName: 'E2E OrdersSvc Tee',
+                variantLabel: 'Concurrency / Test',
+              },
+            ],
+          },
+          statusHistory: {
+            create: { status: OrderStatus.PAID, changedByUserId: user.id },
+          },
+        },
+      });
+      orderId = order.id;
+
+      const results = await Promise.allSettled([
+        ordersService.updateStatus(order.id, manager, {
+          status: OrderStatus.PROCESSING,
+        }),
+        ordersService.updateStatus(order.id, manager, {
+          status: OrderStatus.PROCESSING,
+        }),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      const reason = rejected[0].reason as ConflictException;
+      expect(reason).toBeInstanceOf(ConflictException);
+      expect(reason.message).toBe(
+        'Order status changed concurrently, please retry',
+      );
+
+      const finalOrder = await prisma.order.findUniqueOrThrow({
+        where: { id: order.id },
+      });
+      expect(finalOrder.status).toBe(OrderStatus.PROCESSING);
+
+      const processingEntries = await prisma.orderStatusHistory.count({
+        where: { orderId: order.id, status: OrderStatus.PROCESSING },
+      });
+      expect(processingEntries).toBe(1);
     });
   });
 });

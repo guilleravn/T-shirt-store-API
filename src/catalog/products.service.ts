@@ -1,12 +1,12 @@
 import {
   BadRequestException,
-  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Prisma, UserRole } from '../../generated/prisma/client';
+import { mapPrismaWriteError } from '../common/prisma-error.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { CategoryResponseDto } from './dto/category-response.dto';
 import { CreateProductDto } from './dto/create-product.dto';
@@ -197,7 +197,10 @@ export class ProductsService {
       });
       return new ProductDetailResponseDto(product, this.buildImageUrl);
     } catch (error) {
-      throw this.mapWriteError(error);
+      throw mapPrismaWriteError(error, {
+        uniqueViolation: 'Duplicate SKU or color/size combination',
+        foreignKeyViolation: 'Invalid colorId or sizeId',
+      });
     }
   }
 
@@ -295,18 +298,6 @@ export class ProductsService {
     if (count !== categoryIds.length) {
       throw new BadRequestException('One or more categoryIds do not exist');
     }
-  }
-
-  private mapWriteError(error: unknown): unknown {
-    if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      if (error.code === 'P2002') {
-        return new ConflictException('Duplicate SKU or color/size combination');
-      }
-      if (error.code === 'P2003') {
-        return new BadRequestException('Invalid colorId or sizeId');
-      }
-    }
-    return error;
   }
 
   private buildProductWhere(
