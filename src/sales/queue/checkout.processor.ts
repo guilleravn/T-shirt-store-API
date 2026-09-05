@@ -36,11 +36,22 @@ export class CheckoutProcessor extends WorkerHost {
         };
         // paymentId is unique and deterministic per refund — stable across BullMQ retries of
         // this exact job, which is what makes it a correct idempotency key here.
-        await this.stripeService.refundPayment(stripeReferenceId, paymentId);
-        await this.prisma.payment.update({
-          where: { id: paymentId },
-          data: { refundedAt: new Date() },
-        });
+        const refund = await this.stripeService.refundPayment(
+          stripeReferenceId,
+          paymentId,
+        );
+        // Only a `succeeded` refund is actually confirmed money back — `pending` (ACH/bank
+        // debit) or `requires_action` (flagged for review) settle later. Those get `refundedAt`
+        // written by the `charge.refunded` webhook handler instead (stripe-webhook.service.ts),
+        // the same "the webhook is the source of truth for what Stripe actually confirmed"
+        // pattern R4 already uses for payment success — marking it here unconditionally would
+        // tell a customer "refunded" before Stripe has actually settled it.
+        if (refund.status === 'succeeded') {
+          await this.prisma.payment.update({
+            where: { id: paymentId },
+            data: { refundedAt: new Date() },
+          });
+        }
         return;
       }
       default:

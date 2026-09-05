@@ -29,8 +29,11 @@ describe('CheckoutProcessor', () => {
     processor = module.get(CheckoutProcessor);
   });
 
-  it('refunds the payment via Stripe with paymentId as the idempotency key, then marks refundedAt', async () => {
-    stripeService.refundPayment.mockResolvedValue({ id: 're_1' });
+  it('refunds the payment via Stripe with paymentId as the idempotency key, then marks refundedAt once Stripe confirms it succeeded', async () => {
+    stripeService.refundPayment.mockResolvedValue({
+      id: 're_1',
+      status: 'succeeded',
+    });
 
     await processor.process(
       buildJob(CheckoutJobName.RefundPayment, {
@@ -44,6 +47,22 @@ describe('CheckoutProcessor', () => {
       where: { id: 'pay-1' },
       data: { refundedAt: expect.any(Date) as Date },
     });
+  });
+
+  it('does not mark refundedAt when the refund is not yet succeeded (e.g. pending)', async () => {
+    stripeService.refundPayment.mockResolvedValue({
+      id: 're_1',
+      status: 'pending',
+    });
+
+    await processor.process(
+      buildJob(CheckoutJobName.RefundPayment, {
+        paymentId: 'pay-1',
+        stripeReferenceId: 'pi_1',
+      }),
+    );
+
+    expect(prisma.payment.update).not.toHaveBeenCalled();
   });
 
   it('throws on an unknown job name instead of silently succeeding', async () => {

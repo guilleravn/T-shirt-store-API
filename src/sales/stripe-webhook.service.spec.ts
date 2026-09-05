@@ -3,20 +3,12 @@ import { BadRequestException } from '@nestjs/common';
 import { StripeWebhookService } from './stripe-webhook.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StripeService } from './stripe/stripe.service';
-import {
-  OrderStatus,
-  PaymentMethod,
-  Prisma,
-} from '../../generated/prisma/client';
+import { OrderStatus, PaymentMethod } from '../../generated/prisma/client';
 
 function buildPrismaMock() {
   const prisma = {
-    stripeEvent: {
-      findUnique: jest.fn(),
-      create: jest.fn(),
-      update: jest.fn(),
-    },
-    payment: { update: jest.fn(), create: jest.fn() },
+    stripeEvent: { update: jest.fn() },
+    payment: { update: jest.fn(), create: jest.fn(), updateMany: jest.fn() },
     order: { findUniqueOrThrow: jest.fn(), update: jest.fn() },
     orderItem: { update: jest.fn() },
     orderStatusHistory: { create: jest.fn() },
@@ -29,6 +21,34 @@ function buildPrismaMock() {
     (callback: (tx: typeof prisma) => unknown) => callback(prisma),
   );
   return prisma;
+}
+
+// Every `$queryRaw` call in the service goes through this one mock function, so a single test
+// has to distinguish which of the three shapes it's answering (the idempotency-claim INSERT, the
+// FOR UPDATE lock SELECT, or R3's stock-decrement UPDATE) by the SQL text itself.
+function mockQueryRaw(
+  prisma: ReturnType<typeof buildPrismaMock>,
+  options: {
+    claimed?: boolean;
+    lockedProcessedAt?: Date | null;
+    stock?: { stock: number }[];
+  } = {},
+) {
+  const {
+    claimed = true,
+    lockedProcessedAt = null,
+    stock = [{ stock: 3 }],
+  } = options;
+  prisma.$queryRaw.mockImplementation((strings: TemplateStringsArray) => {
+    const sql = strings.join('');
+    if (sql.includes('INSERT INTO stripe_events')) {
+      return Promise.resolve(claimed ? [{ id: 'row-1' }] : []);
+    }
+    if (sql.includes('SELECT processed_at')) {
+      return Promise.resolve([{ processedAt: lockedProcessedAt }]);
+    }
+    return Promise.resolve(stock);
+  });
 }
 
 function buildOrder(overrides: Partial<Record<string, unknown>> = {}) {
@@ -76,7 +96,7 @@ describe('StripeWebhookService', () => {
     await expect(
       service.handleEvent(Buffer.from('{}'), 'bad-sig'),
     ).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.stripeEvent.findUnique).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('returns early without reprocessing an already-processed event', async () => {
@@ -85,19 +105,17 @@ describe('StripeWebhookService', () => {
       type: 'payment_intent.succeeded',
       data: { object: {} },
     });
-    prisma.stripeEvent.findUnique.mockResolvedValue({
-      stripeEventId: 'evt_1',
-      processedAt: new Date(),
-    });
+    // The claim loses (a row for this event already exists) and the FOR UPDATE lock finds it
+    // already processed — this delivery must do nothing at all.
+    mockQueryRaw(prisma, { claimed: false, lockedProcessedAt: new Date() });
 
     await service.handleEvent(Buffer.from('{}'), 'sig');
 
-    expect(prisma.stripeEvent.create).not.toHaveBeenCalled();
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.payment.update).not.toHaveBeenCalled();
     expect(prisma.stripeEvent.update).not.toHaveBeenCalled();
   });
 
-  it('reprocesses an existing event whose processedAt is still NULL (R4)', async () => {
+  it('reprocesses an event whose claim lost but is still unprocessed under the lock (R4)', async () => {
     stripeService.constructWebhookEvent.mockReturnValue({
       id: 'evt_1',
       type: 'payment_intent.succeeded',
@@ -109,61 +127,74 @@ describe('StripeWebhookService', () => {
         },
       },
     });
-    prisma.stripeEvent.findUnique.mockResolvedValue({
-      stripeEventId: 'evt_1',
-      processedAt: null,
-    });
+    // The claim loses, but the row it locked is still NULL — either a previous attempt crashed
+    // before marking it, or another delivery is genuinely running concurrently right now.
+    mockQueryRaw(prisma, { claimed: false, lockedProcessedAt: null });
     prisma.payment.update.mockResolvedValue({
       id: 'pay-1',
       method: PaymentMethod.PAYMENT_INTENT,
     });
     prisma.order.findUniqueOrThrow.mockResolvedValue(buildOrder());
-    prisma.$queryRaw.mockResolvedValue([{ stock: 3 }]);
     prisma.cart.findUnique.mockResolvedValue(null);
 
     await service.handleEvent(Buffer.from('{}'), 'sig');
 
-    expect(prisma.stripeEvent.create).not.toHaveBeenCalled();
+    expect(prisma.payment.update).toHaveBeenCalled();
     expect(prisma.stripeEvent.update).toHaveBeenCalledWith({
       where: { stripeEventId: 'evt_1' },
       data: { processedAt: expect.any(Date) as Date },
     });
-  });
-
-  it('treats a concurrent duplicate insert (P2002) as already being handled', async () => {
-    stripeService.constructWebhookEvent.mockReturnValue({
-      id: 'evt_1',
-      type: 'payment_intent.succeeded',
-      data: { object: {} },
-    });
-    prisma.stripeEvent.findUnique.mockResolvedValue(null);
-    prisma.stripeEvent.create.mockRejectedValue(
-      new Prisma.PrismaClientKnownRequestError('duplicate', {
-        code: 'P2002',
-        clientVersion: 'test',
-      }),
-    );
-
-    await service.handleEvent(Buffer.from('{}'), 'sig');
-
-    expect(prisma.$transaction).not.toHaveBeenCalled();
-    expect(prisma.stripeEvent.update).not.toHaveBeenCalled();
   });
 
   it('marks an unhandled event type as processed without touching any order', async () => {
     stripeService.constructWebhookEvent.mockReturnValue({
       id: 'evt_1',
-      type: 'charge.refunded',
+      type: 'customer.created',
       data: { object: {} },
     });
-    prisma.stripeEvent.findUnique.mockResolvedValue(null);
+    mockQueryRaw(prisma, { claimed: true });
 
     await service.handleEvent(Buffer.from('{}'), 'sig');
 
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.payment.update).not.toHaveBeenCalled();
     expect(prisma.stripeEvent.update).toHaveBeenCalledWith({
       where: { stripeEventId: 'evt_1' },
       data: { processedAt: expect.any(Date) as Date },
+    });
+  });
+
+  describe('charge.refunded', () => {
+    it('writes refundedAt on the matching payment once the charge is fully refunded', async () => {
+      stripeService.constructWebhookEvent.mockReturnValue({
+        id: 'evt_1',
+        type: 'charge.refunded',
+        data: {
+          object: { payment_intent: 'pi_1', refunded: true },
+        },
+      });
+      mockQueryRaw(prisma, { claimed: true });
+
+      await service.handleEvent(Buffer.from('{}'), 'sig');
+
+      expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+        where: { stripeReferenceId: 'pi_1' },
+        data: { refundedAt: expect.any(Date) as Date },
+      });
+    });
+
+    it('does nothing when the charge is only partially refunded', async () => {
+      stripeService.constructWebhookEvent.mockReturnValue({
+        id: 'evt_1',
+        type: 'charge.refunded',
+        data: {
+          object: { payment_intent: 'pi_1', refunded: false },
+        },
+      });
+      mockQueryRaw(prisma, { claimed: true });
+
+      await service.handleEvent(Buffer.from('{}'), 'sig');
+
+      expect(prisma.payment.updateMany).not.toHaveBeenCalled();
     });
   });
 
@@ -180,7 +211,7 @@ describe('StripeWebhookService', () => {
           },
         },
       });
-      prisma.stripeEvent.findUnique.mockResolvedValue(null);
+      mockQueryRaw(prisma, { claimed: true });
     }
 
     it('updates the payment row with the amount Stripe actually settled', async () => {
@@ -190,7 +221,6 @@ describe('StripeWebhookService', () => {
         method: PaymentMethod.PAYMENT_INTENT,
       });
       prisma.order.findUniqueOrThrow.mockResolvedValue(buildOrder());
-      prisma.$queryRaw.mockResolvedValue([{ stock: 3 }]);
       prisma.cart.findUnique.mockResolvedValue(null);
 
       await service.handleEvent(Buffer.from('{}'), 'sig');
@@ -211,7 +241,6 @@ describe('StripeWebhookService', () => {
         method: PaymentMethod.PAYMENT_INTENT,
       });
       prisma.order.findUniqueOrThrow.mockResolvedValue(buildOrder());
-      prisma.$queryRaw.mockResolvedValue([{ stock: 3 }]);
       prisma.cart.findUnique.mockResolvedValue({ id: 'cart-1' });
 
       await service.handleEvent(Buffer.from('{}'), 'sig');
@@ -244,7 +273,7 @@ describe('StripeWebhookService', () => {
         method: PaymentMethod.PAYMENT_INTENT,
       });
       prisma.order.findUniqueOrThrow.mockResolvedValue(buildOrder());
-      prisma.$queryRaw.mockResolvedValue([]); // 0 rows affected — oversold
+      mockQueryRaw(prisma, { claimed: true, stock: [] }); // 0 rows affected — oversold
       prisma.cart.findUnique.mockResolvedValue(null);
 
       await service.handleEvent(Buffer.from('{}'), 'sig');
@@ -277,7 +306,6 @@ describe('StripeWebhookService', () => {
 
       await service.handleEvent(Buffer.from('{}'), 'sig');
 
-      expect(prisma.$queryRaw).not.toHaveBeenCalled();
       expect(prisma.order.update).not.toHaveBeenCalled();
       expect(prisma.orderStatusHistory.create).not.toHaveBeenCalled();
       expect(prisma.cartItem.deleteMany).not.toHaveBeenCalled();
@@ -296,13 +324,12 @@ describe('StripeWebhookService', () => {
           },
         },
       });
-      prisma.stripeEvent.findUnique.mockResolvedValue(null);
+      mockQueryRaw(prisma, { claimed: true });
       prisma.payment.create.mockResolvedValue({
         id: 'pay-2',
         method: PaymentMethod.PAYMENT_LINK,
       });
       prisma.order.findUniqueOrThrow.mockResolvedValue(buildOrder());
-      prisma.$queryRaw.mockResolvedValue([{ stock: 3 }]);
 
       await service.handleEvent(Buffer.from('{}'), 'sig');
 
@@ -325,13 +352,12 @@ describe('StripeWebhookService', () => {
           },
         },
       });
-      prisma.stripeEvent.findUnique.mockResolvedValue(null);
+      mockQueryRaw(prisma, { claimed: true });
       prisma.payment.create.mockResolvedValue({
         id: 'pay-2',
         method: PaymentMethod.PAYMENT_LINK,
       });
       prisma.order.findUniqueOrThrow.mockResolvedValue(buildOrder());
-      prisma.$queryRaw.mockResolvedValue([{ stock: 3 }]);
 
       await service.handleEvent(Buffer.from('{}'), 'sig');
 
