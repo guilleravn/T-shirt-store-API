@@ -35,6 +35,7 @@ function buildPrismaMock() {
       findUnique: jest.fn(),
       updateMany: jest.fn(),
     },
+    $executeRaw: jest.fn(),
     $transaction: jest.fn(),
   };
   // Every test reuses the same mock as the transaction client — this is a unit test of
@@ -315,6 +316,16 @@ describe('AuthService', () => {
       expect(emailQueueService.enqueuePasswordResetEmail).toHaveBeenCalledWith(
         expect.objectContaining({ to: baseUser.email }),
       );
+    });
+
+    it('takes a per-account advisory lock before counting, to close the concurrent-request race', async () => {
+      prisma.user.findUnique.mockResolvedValue(baseUser);
+      prisma.passwordResetToken.count.mockResolvedValue(0);
+      prisma.passwordResetToken.create.mockResolvedValue({});
+
+      await service.forgotPassword({ email: baseUser.email });
+
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
     });
 
     it('stops silently once the per-account rate limit (3/hour) is hit', async () => {
