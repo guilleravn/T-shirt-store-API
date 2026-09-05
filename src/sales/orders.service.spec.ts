@@ -711,10 +711,29 @@ describe('OrdersService', () => {
         { reason: 'changed my mind' },
       );
 
-      expect(prisma.order.update).toHaveBeenCalledWith({
-        where: { id: 'order-1' },
+      expect(prisma.order.updateMany).toHaveBeenCalledWith({
+        where: { id: 'order-1', status: OrderStatus.PENDING },
         data: { status: OrderStatus.CANCELLED },
       });
+    });
+
+    it('throws ConflictException when it loses the race to cancel the row concurrently', async () => {
+      prisma.order.findUnique.mockResolvedValue(
+        buildOrder({ status: OrderStatus.PENDING }),
+      );
+      prisma.order.findUniqueOrThrow.mockResolvedValue(
+        buildOrder({ status: OrderStatus.PENDING }),
+      );
+      prisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.cancel(
+          'order-1',
+          buildUser({ id: 'user-1', role: UserRole.CLIENT }),
+          {},
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.orderStatusHistory.create).not.toHaveBeenCalled();
     });
 
     it('rejects cancelling an already-SHIPPED order', async () => {
@@ -890,7 +909,7 @@ describe('OrdersService', () => {
           {},
         ),
       ).rejects.toBeInstanceOf(ConflictException);
-      expect(prisma.order.update).not.toHaveBeenCalled();
+      expect(prisma.order.updateMany).not.toHaveBeenCalled();
     });
 
     it('enqueues a refund when a SUCCEEDED payment exists for the cancelled order', async () => {

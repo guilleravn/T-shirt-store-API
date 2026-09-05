@@ -409,10 +409,18 @@ export class OrdersService {
         throw new ConflictException('Order can no longer be cancelled');
       }
 
-      await tx.order.update({
-        where: { id: orderId },
+      // Conditional on the status just read, not a plain update — this is what makes the write
+      // itself acquire the row lock atomically with the check above. It's also what
+      // checkout.service.ts's createPaymentIntent relies on: its own SELECT ... FOR UPDATE only
+      // closes its half of that race if this side's write is guaranteed to wait on the same lock
+      // instead of writing straight past it.
+      const { count } = await tx.order.updateMany({
+        where: { id: orderId, status: currentOrder.status },
         data: { status: OrderStatus.CANCELLED },
       });
+      if (count === 0) {
+        throw new ConflictException('Order can no longer be cancelled');
+      }
       await tx.orderStatusHistory.create({
         data: {
           orderId,

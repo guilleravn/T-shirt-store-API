@@ -102,20 +102,40 @@ export class CheckoutService {
     }
 
     try {
-      // amountCents here is the charge intent (what we asked Stripe for), matching
-      // orders.totalCents at this moment — the webhook is what later records what Stripe
-      // actually settled, not this row (see the plan's Payment.amountCents decision).
-      await this.prisma.payment.create({
-        data: {
-          orderId: order.id,
-          method: PaymentMethod.PAYMENT_INTENT,
-          stripeReferenceId: intent.id,
-          amountCents: order.totalCents,
-          currency: order.currency,
-          status: PaymentStatus.PENDING,
-        },
+      await this.prisma.$transaction(async (tx) => {
+        // Re-verify under a real row lock, immediately before the write: createPaymentIntent and
+        // cancel() touch different tables (payments vs orders) and never naturally serialize, so
+        // the plain status check above can be stale by the time this runs — a concurrent
+        // cancel() could commit in between, and without this we'd insert a real Stripe
+        // PaymentIntent (and, if the buyer completes it, a real charge) against an order the
+        // system already considers cancelled, with no refund armed for it. Same raw-lock idiom
+        // promo-redemption.util.ts uses for promo_codes; cancel()'s own conditional updateMany is
+        // what makes it wait on this lock rather than writing straight past it.
+        const rows = await tx.$queryRaw<{ status: OrderStatus }[]>`
+          SELECT status FROM orders WHERE id = ${order.id} FOR UPDATE
+        `;
+        if (rows[0]?.status !== OrderStatus.PENDING) {
+          throw new ConflictException('Order is not awaiting payment');
+        }
+
+        // amountCents here is the charge intent (what we asked Stripe for), matching
+        // orders.totalCents at this moment — the webhook is what later records what Stripe
+        // actually settled, not this row (see the plan's Payment.amountCents decision).
+        await tx.payment.create({
+          data: {
+            orderId: order.id,
+            method: PaymentMethod.PAYMENT_INTENT,
+            stripeReferenceId: intent.id,
+            amountCents: order.totalCents,
+            currency: order.currency,
+            status: PaymentStatus.PENDING,
+          },
+        });
       });
     } catch (error) {
+      if (error instanceof ConflictException) {
+        throw error;
+      }
       throw mapPrismaWriteError(error, {
         uniqueViolation: 'A payment for this order is already in progress',
       });
