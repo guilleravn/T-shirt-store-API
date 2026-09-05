@@ -97,6 +97,14 @@ CREATE UNIQUE INDEX product_variant_combo_unique
   ON product_variants (product_id, color_id, size_id)
   WHERE deleted_at IS NULL;
 
+-- Un usuario puede tener cualquier cantidad de ordenes PAID/CANCELLED/etc, pero a lo sumo
+-- una PENDING a la vez (feature de checkout: "un usuario, un carrito activo"). Sin esto, dos
+-- POST /orders simultaneos (doble click, doble tab) pasan el mismo chequeo findFirst antes de
+-- que cualquiera de las dos inserte, y ambas ordenes se crean.
+CREATE UNIQUE INDEX one_pending_order_per_user
+  ON orders (user_id)
+  WHERE status = 'PENDING';
+
 
 -- ═══════════════════════════════════════════════════════════
 --  EVALUADO Y DESCARTADO — dejar constancia del porque

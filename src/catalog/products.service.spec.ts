@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ProductsService } from './products.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { S3ImageStorageService } from './s3-image-storage.service';
 import { Prisma, UserRole } from '../../generated/prisma/client';
 import { ProductSort } from './dto/list-products-query.dto';
 
@@ -64,6 +65,8 @@ function buildProduct(overrides: Partial<Record<string, unknown>> = {}) {
         size,
       },
     ],
+    images: [],
+    _count: { likes: 0 },
     ...overrides,
   };
 }
@@ -71,13 +74,18 @@ function buildProduct(overrides: Partial<Record<string, unknown>> = {}) {
 describe('ProductsService', () => {
   let service: ProductsService;
   let prisma: ReturnType<typeof buildPrismaMock>;
+  let imageStorage: { getPublicUrl: jest.Mock };
 
   beforeEach(async () => {
     prisma = buildPrismaMock();
+    imageStorage = {
+      getPublicUrl: jest.fn((key: string) => `https://cdn.example/${key}`),
+    };
     const module = await Test.createTestingModule({
       providers: [
         ProductsService,
         { provide: PrismaService, useValue: prisma },
+        { provide: S3ImageStorageService, useValue: imageStorage },
       ],
     }).compile();
     service = module.get(ProductsService);
@@ -109,6 +117,84 @@ describe('ProductsService', () => {
         offset: 0,
         hasMore: false,
       });
+    });
+
+    it('maps the first image (already sorted by the include) as primaryImage', async () => {
+      prisma.product.count.mockResolvedValue(1);
+      prisma.product.findMany.mockResolvedValue([
+        buildProduct({
+          images: [
+            {
+              id: 'img-1',
+              s3Key: 'products/prod-1/img-1.jpg',
+              altText: 'Front',
+              position: 0,
+            },
+          ],
+        }),
+      ]);
+
+      const result = await service.list({ limit: 20, offset: 0 });
+
+      expect(imageStorage.getPublicUrl).toHaveBeenCalledWith(
+        'products/prod-1/img-1.jpg',
+      );
+      expect(result.data[0].primaryImage).toEqual({
+        id: 'img-1',
+        url: 'https://cdn.example/products/prod-1/img-1.jpg',
+        altText: 'Front',
+        position: 0,
+      });
+    });
+
+    it('returns null primaryImage when the product has no images', async () => {
+      prisma.product.count.mockResolvedValue(1);
+      prisma.product.findMany.mockResolvedValue([buildProduct()]);
+
+      const result = await service.list({ limit: 20, offset: 0 });
+
+      expect(result.data[0].primaryImage).toBeNull();
+    });
+
+    it('reports likesCount and likedByMe:false for an anonymous caller', async () => {
+      prisma.product.count.mockResolvedValue(1);
+      prisma.product.findMany.mockResolvedValue([
+        buildProduct({ _count: { likes: 5 } }),
+      ]);
+
+      const result = await service.list({ limit: 20, offset: 0 });
+
+      expect(prisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          include: expect.not.objectContaining({
+            likes: expect.anything() as unknown,
+          }) as Record<string, unknown>,
+        }),
+      );
+      expect(result.data[0].likesCount).toBe(5);
+      expect(result.data[0].likedByMe).toBe(false);
+    });
+
+    it('includes a likedByMe existence check for an authenticated caller', async () => {
+      prisma.product.count.mockResolvedValue(1);
+      prisma.product.findMany.mockResolvedValue([
+        buildProduct({ _count: { likes: 2 }, likes: [{ userId: 'user-1' }] }),
+      ]);
+
+      const result = await service.list(
+        { limit: 20, offset: 0 },
+        { id: 'user-1', role: UserRole.CLIENT },
+      );
+
+      expect(prisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          include: expect.objectContaining({
+            likes: { where: { userId: 'user-1' }, select: { userId: true } },
+          }) as Record<string, unknown>,
+        }),
+      );
+      expect(result.data[0].likesCount).toBe(2);
+      expect(result.data[0].likedByMe).toBe(true);
     });
 
     it('rejects includeInactive from an anonymous caller', async () => {
@@ -287,6 +373,58 @@ describe('ProductsService', () => {
       await expect(service.detail('missing')).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+
+    it('reports likedByMe:true when the caller already liked the product', async () => {
+      prisma.product.findFirst.mockResolvedValue(
+        buildProduct({ _count: { likes: 1 }, likes: [{ userId: 'user-1' }] }),
+      );
+
+      const result = await service.detail('prod-1', {
+        id: 'user-1',
+        role: UserRole.CLIENT,
+      });
+
+      expect(result.likesCount).toBe(1);
+      expect(result.likedByMe).toBe(true);
+    });
+
+    it('maps every image in the gallery', async () => {
+      prisma.product.findFirst.mockResolvedValue(
+        buildProduct({
+          images: [
+            {
+              id: 'img-1',
+              s3Key: 'products/prod-1/img-1.jpg',
+              altText: 'Front',
+              position: 0,
+            },
+            {
+              id: 'img-2',
+              s3Key: 'products/prod-1/img-2.jpg',
+              altText: null,
+              position: 1,
+            },
+          ],
+        }),
+      );
+
+      const result = await service.detail('prod-1');
+
+      expect(result.images).toEqual([
+        {
+          id: 'img-1',
+          url: 'https://cdn.example/products/prod-1/img-1.jpg',
+          altText: 'Front',
+          position: 0,
+        },
+        {
+          id: 'img-2',
+          url: 'https://cdn.example/products/prod-1/img-2.jpg',
+          altText: null,
+          position: 1,
+        },
+      ]);
     });
   });
 

@@ -11,8 +11,10 @@ import {
   Post,
   Put,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { UserRole } from '../../generated/prisma/client';
 import type { User } from '../../generated/prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -36,7 +38,7 @@ export class ProductsController {
   list(@Query() query: ListProductsQueryDto, @CurrentUser() user?: User) {
     return this.productsService.list(
       query,
-      user ? { role: user.role } : undefined,
+      user ? { id: user.id, role: user.role } : undefined,
     );
   }
 
@@ -44,8 +46,13 @@ export class ProductsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.MANAGER)
   @HttpCode(HttpStatus.CREATED)
-  create(@Body() dto: CreateProductDto) {
-    return this.productsService.create(dto);
+  async create(
+    @Body() dto: CreateProductDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const product = await this.productsService.create(dto);
+    res.setHeader('Location', `/v1/products/${product.id}`);
+    return product;
   }
 
   @Get(':productId')
@@ -56,7 +63,7 @@ export class ProductsController {
   ) {
     return this.productsService.detail(
       productId,
-      user ? { role: user.role } : undefined,
+      user ? { id: user.id, role: user.role } : undefined,
     );
   }
 

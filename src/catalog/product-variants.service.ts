@@ -1,10 +1,10 @@
 import {
-  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
+import { mapPrismaWriteError } from '../common/prisma-error.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdjustStockResponseDto } from './dto/adjust-stock-response.dto';
 import { CreateVariantDto } from './dto/create-variant.dto';
@@ -73,7 +73,10 @@ export class ProductVariantsService {
       });
       return new VariantResponseDto(variant);
     } catch (error) {
-      throw this.mapWriteError(error);
+      throw mapPrismaWriteError(error, {
+        uniqueViolation: 'Duplicate SKU or color/size combination',
+        foreignKeyViolation: 'Invalid colorId or sizeId',
+      });
     }
   }
 
@@ -92,7 +95,10 @@ export class ProductVariantsService {
         },
       });
     } catch (error) {
-      throw this.mapWriteError(error);
+      throw mapPrismaWriteError(error, {
+        uniqueViolation: 'Duplicate SKU or color/size combination',
+        foreignKeyViolation: 'Invalid colorId or sizeId',
+      });
     }
     if (result.count === 0) {
       throw new NotFoundException('Variant not found');
@@ -176,17 +182,5 @@ export class ProductVariantsService {
     if (!product) {
       throw new NotFoundException('Product not found');
     }
-  }
-
-  private mapWriteError(error: unknown): unknown {
-    if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      if (error.code === 'P2002') {
-        return new ConflictException('Duplicate SKU or color/size combination');
-      }
-      if (error.code === 'P2003') {
-        return new BadRequestException('Invalid colorId or sizeId');
-      }
-    }
-    return error;
   }
 }

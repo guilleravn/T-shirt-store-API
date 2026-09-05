@@ -1,12 +1,12 @@
 import {
   BadRequestException,
-  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Prisma, UserRole } from '../../generated/prisma/client';
+import { mapPrismaWriteError } from '../common/prisma-error.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { CategoryResponseDto } from './dto/category-response.dto';
 import { CreateProductDto } from './dto/create-product.dto';
@@ -15,24 +15,48 @@ import {
   ProductSort,
 } from './dto/list-products-query.dto';
 import { PageMetaDto } from './dto/page-meta.dto';
-import { ProductCardResponseDto } from './dto/product-card-response.dto';
+import {
+  BuildImageUrl,
+  ProductCardResponseDto,
+} from './dto/product-card-response.dto';
 import { ProductDetailResponseDto } from './dto/product-detail-response.dto';
 import { ReplaceCategoriesResponseDto } from './dto/replace-categories-response.dto';
 import { SetActiveResponseDto } from './dto/set-active-response.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { S3ImageStorageService } from './s3-image-storage.service';
 
 export interface Requester {
+  // Optional: only present for a real authenticated caller, used to personalize `likedByMe`.
+  // The internal MANAGER-view call from update() below has no real caller and omits it.
+  id?: string;
   role: UserRole;
 }
+
+// The DBML's documented determinism rule for "the primary image" is
+// ORDER BY position, created_at, id LIMIT 1 — every include below sorts images this way so
+// callers can just take images[0].
+const IMAGES_INCLUDE: {
+  orderBy: Prisma.ProductImageOrderByWithRelationInput[];
+} = {
+  orderBy: [{ position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+};
 
 const PRODUCT_INCLUDE = {
   productCategories: { include: { category: true } },
   variants: { include: { color: true, size: true } },
+  images: IMAGES_INCLUDE,
+  _count: { select: { likes: true } },
 } as const;
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly buildImageUrl: BuildImageUrl = (key) =>
+    this.imageStorage.getPublicUrl(key);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly imageStorage: S3ImageStorageService,
+  ) {}
 
   async list(
     query: ListProductsQueryDto,
@@ -70,6 +94,7 @@ export class ProductsService {
         query.sort,
         limit,
         offset,
+        requester?.id,
       );
     }
 
@@ -86,12 +111,16 @@ export class ProductsService {
         include: {
           productCategories: { include: { category: true } },
           variants: { where: variantVisibility },
+          images: IMAGES_INCLUDE,
+          ...this.buildLikesInclude(requester?.id),
         },
       }),
     ]);
 
     return {
-      data: products.map((product) => new ProductCardResponseDto(product)),
+      data: products.map(
+        (product) => new ProductCardResponseDto(product, this.buildImageUrl),
+      ),
       meta: new PageMetaDto({ total, limit, offset }),
     };
   }
@@ -113,12 +142,14 @@ export class ProductsService {
           where: this.variantVisibilityFilter(isManager, true),
           include: { color: true, size: true },
         },
+        images: IMAGES_INCLUDE,
+        ...this.buildLikesInclude(requester?.id),
       },
     });
     if (!product) {
       throw new NotFoundException('Product not found');
     }
-    return new ProductDetailResponseDto(product);
+    return new ProductDetailResponseDto(product, this.buildImageUrl);
   }
 
   async create(dto: CreateProductDto): Promise<ProductDetailResponseDto> {
@@ -164,9 +195,12 @@ export class ProductsService {
           include: PRODUCT_INCLUDE,
         });
       });
-      return new ProductDetailResponseDto(product);
+      return new ProductDetailResponseDto(product, this.buildImageUrl);
     } catch (error) {
-      throw this.mapWriteError(error);
+      throw mapPrismaWriteError(error, {
+        uniqueViolation: 'Duplicate SKU or color/size combination',
+        foreignKeyViolation: 'Invalid colorId or sizeId',
+      });
     }
   }
 
@@ -246,6 +280,17 @@ export class ProductsService {
     );
   }
 
+  // _count always runs; the `likes` existence-check only runs for an authenticated caller, so
+  // an anonymous request never needs likedByMe resolved to anything but false.
+  private buildLikesInclude(requesterId?: string) {
+    return {
+      _count: { select: { likes: true } },
+      ...(requesterId && {
+        likes: { where: { userId: requesterId }, select: { userId: true } },
+      }),
+    };
+  }
+
   private async assertCategoriesExist(categoryIds: string[]): Promise<void> {
     const count = await this.prisma.category.count({
       where: { id: { in: categoryIds } },
@@ -253,18 +298,6 @@ export class ProductsService {
     if (count !== categoryIds.length) {
       throw new BadRequestException('One or more categoryIds do not exist');
     }
-  }
-
-  private mapWriteError(error: unknown): unknown {
-    if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      if (error.code === 'P2002') {
-        return new ConflictException('Duplicate SKU or color/size combination');
-      }
-      if (error.code === 'P2003') {
-        return new BadRequestException('Invalid colorId or sizeId');
-      }
-    }
-    return error;
   }
 
   private buildProductWhere(
@@ -338,6 +371,7 @@ export class ProductsService {
     sort: ProductSort.PriceAsc | ProductSort.PriceDesc,
     limit: number,
     offset: number,
+    requesterId?: string,
   ): Promise<{ data: ProductCardResponseDto[]; meta: PageMetaDto }> {
     const variantWhere: Prisma.ProductVariantWhereInput = {
       ...variantVisibility,
@@ -369,6 +403,8 @@ export class ProductsService {
       include: {
         productCategories: { include: { category: true } },
         variants: { where: variantVisibility },
+        images: IMAGES_INCLUDE,
+        ...this.buildLikesInclude(requesterId),
       },
     });
     const byId = new Map(products.map((product) => [product.id, product]));
@@ -378,7 +414,9 @@ export class ProductsService {
       .filter((product): product is NonNullable<typeof product> =>
         Boolean(product),
       )
-      .map((product) => new ProductCardResponseDto(product));
+      .map(
+        (product) => new ProductCardResponseDto(product, this.buildImageUrl),
+      );
 
     return {
       data,
