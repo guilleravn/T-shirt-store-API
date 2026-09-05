@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import Stripe from 'stripe';
 import {
   OrderStatus,
+  Payment,
   PaymentMethod,
   PaymentStatus,
   Prisma,
@@ -86,16 +87,35 @@ export class StripeWebhookService {
       return;
     }
 
-    // amount_received is what Stripe actually settled — never orders.totalCents, which is only
-    // the charge intent (see the plan's Payment.amountCents decision).
-    const payment = await tx.payment.update({
-      where: { stripeReferenceId: intent.id },
-      data: {
-        status: PaymentStatus.SUCCEEDED,
-        paidAt: new Date(),
-        amountCents: intent.amount_received,
-      },
-    });
+    let payment: Payment;
+    try {
+      // amount_received is what Stripe actually settled — never orders.totalCents, which is
+      // only the charge intent (see the plan's Payment.amountCents decision).
+      payment = await tx.payment.update({
+        where: { stripeReferenceId: intent.id },
+        data: {
+          status: PaymentStatus.SUCCEEDED,
+          paidAt: new Date(),
+          amountCents: intent.amount_received,
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2025'
+      ) {
+        // No payments row exists for this PaymentIntent — createPaymentIntent's own insert must
+        // have failed after Stripe already created the intent (a DB blip between the two calls).
+        // Logged as an anomaly rather than thrown: retrying this event can never fix a payments
+        // row that was never created, so letting it surface as a 500 would only buy Stripe's
+        // 3-day retry loop for nothing (R4's processed_at guard exists to stop exactly that).
+        this.logger.error(
+          `payment_intent.succeeded for ${intent.id} (order ${orderId}) has no matching payments row — orphaned PaymentIntent, needs manual reconciliation`,
+        );
+        return;
+      }
+      throw error;
+    }
     await this.finalizeSuccessfulPayment(tx, orderId, payment.method);
   }
 
@@ -167,9 +187,18 @@ export class StripeWebhookService {
     // A Payment Link purchase fires both checkout.session.completed and payment_intent.succeeded
     // for the same order, in no guaranteed order (T-Shirt-constraints.sql's own note on why
     // order_status_history has no UNIQUE(order_id, status)) — two genuinely different Stripe
-    // events, so R4's dedupe-by-stripeEventId does nothing to stop this method running twice.
-    // Whichever arrives second finds the order already PAID and must not re-run R3's decrement.
-    if (order.status !== OrderStatus.PENDING) {
+    // events, each with its own stripe_events row and its own R4 lock, so that lock does nothing
+    // to stop these two events' transactions from both reaching this method concurrently. A plain
+    // read-then-branch on order.status isn't enough to guard R3's stock decrement below — both
+    // transactions could read PENDING before either commits. The conditional updateMany is what
+    // actually decides "am I the one that gets to process this," the same idiom R3 itself uses
+    // for stock: whichever transaction's write loses the race sees count === 0 and returns,
+    // never touching stock.
+    const { count } = await tx.order.updateMany({
+      where: { id: orderId, status: OrderStatus.PENDING },
+      data: { status: OrderStatus.PAID },
+    });
+    if (count === 0) {
       return;
     }
 
@@ -192,10 +221,6 @@ export class StripeWebhookService {
       }
     }
 
-    await tx.order.update({
-      where: { id: orderId },
-      data: { status: OrderStatus.PAID },
-    });
     await tx.orderStatusHistory.create({
       data: {
         orderId,

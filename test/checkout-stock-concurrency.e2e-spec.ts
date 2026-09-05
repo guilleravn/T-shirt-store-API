@@ -119,6 +119,11 @@ describe('Checkout stock concurrency (e2e)', () => {
   // pattern tied to this run's own random suffix can never do that). Payments are deleted before
   // their orders — Payment.order is onDelete: Restrict, so the reverse order always fails FK.
   afterAll(async () => {
+    // Never cleaned up before this fix — handleEvent() inserts a real stripe_events row per
+    // call, and every run of this suite left two behind permanently.
+    await prisma.stripeEvent.deleteMany({
+      where: { stripeEventId: { endsWith: `_${suffix}` } },
+    });
     await prisma.payment.deleteMany({
       where: { stripeReferenceId: { endsWith: `_${suffix}` } },
     });
@@ -190,5 +195,170 @@ describe('Checkout stock concurrency (e2e)', () => {
     const cleanNotes = notes.filter((note) => note === null);
     expect(oversoldNotes).toHaveLength(1);
     expect(cleanNotes).toHaveLength(1);
+  });
+
+  // fix(sales): a Payment Link purchase fires two genuinely different Stripe events —
+  // checkout.session.completed and payment_intent.succeeded — each with its own stripe_events
+  // row and its own R4 idempotency lock, so that lock does nothing to stop both transactions from
+  // reaching finalizeSuccessfulPayment concurrently for the same order. Before the fix, a plain
+  // read-then-branch on order.status let both pass and both run R3's stock decrement. Own fixture,
+  // own suffix, own cleanup — separate from the R3 fixture above.
+  describe('Same order, two different Payment Link webhook events racing (e2e)', () => {
+    const dualSuffix = randomUUID().slice(0, 8);
+    let dualOrderId: string;
+    let dualUserId: string;
+    let dualColorId: string;
+    let dualSizeId: string;
+    let dualProductId: string;
+    let dualVariantId: string;
+
+    beforeAll(async () => {
+      const color = await prisma.color.create({
+        data: { name: `E2E Dual Color ${dualSuffix}`, hexCode: '#445566' },
+      });
+      dualColorId = color.id;
+
+      const size = await prisma.size.create({
+        data: { name: `ED-${dualSuffix}`, position: 9700 },
+      });
+      dualSizeId = size.id;
+
+      const product = await prisma.product.create({
+        data: { name: `E2E Dual Tee ${dualSuffix}`, isActive: true },
+      });
+      dualProductId = product.id;
+
+      const variant = await prisma.productVariant.create({
+        data: {
+          productId: dualProductId,
+          colorId: dualColorId,
+          sizeId: dualSizeId,
+          sku: `E2E-DUAL-${dualSuffix}`,
+          priceCents: 2000,
+          stock: 5,
+        },
+      });
+      dualVariantId = variant.id;
+
+      const user = await prisma.user.create({
+        data: {
+          email: `e2e-dual-${dualSuffix}@example.com`,
+          passwordHash: 'not-a-real-hash',
+          firstName: 'E2E',
+          lastName: 'Dual',
+          role: UserRole.CLIENT,
+        },
+      });
+      dualUserId = user.id;
+
+      const order = await prisma.order.create({
+        data: {
+          userId: dualUserId,
+          status: OrderStatus.PENDING,
+          subtotalCents: 2000,
+          discountCents: 0,
+          totalCents: 2000,
+          items: {
+            create: [
+              {
+                productVariantId: dualVariantId,
+                quantity: 1,
+                unitPriceCents: 2000,
+                productName: 'E2E Dual Tee',
+                variantLabel: 'Concurrency / Test',
+              },
+            ],
+          },
+          statusHistory: {
+            create: {
+              status: OrderStatus.PENDING,
+              changedByUserId: dualUserId,
+            },
+          },
+        },
+      });
+      dualOrderId = order.id;
+    });
+
+    afterAll(async () => {
+      await prisma.stripeEvent.deleteMany({
+        where: { stripeEventId: { endsWith: `_${dualSuffix}` } },
+      });
+      await prisma.payment.deleteMany({ where: { orderId: dualOrderId } });
+      await prisma.order.deleteMany({ where: { id: dualOrderId } });
+      await prisma.user.deleteMany({ where: { id: dualUserId } });
+      await prisma.productVariant.deleteMany({ where: { id: dualVariantId } });
+      await prisma.product.deleteMany({ where: { id: dualProductId } });
+      await prisma.color.deleteMany({ where: { id: dualColorId } });
+      await prisma.size.deleteMany({ where: { id: dualSizeId } });
+    });
+
+    it('decrements stock exactly once and records exactly one PAID row', async () => {
+      const paymentIntentId = `pi_e2e_dual_${dualSuffix}`;
+
+      const checkoutSessionPayload = JSON.stringify({
+        id: `evt_e2e_dual_session_${dualSuffix}`,
+        object: 'event',
+        type: 'checkout.session.completed',
+        data: {
+          object: {
+            payment_intent: paymentIntentId,
+            amount_total: 2000,
+            currency: 'usd',
+            metadata: { orderId: dualOrderId },
+          },
+        },
+      });
+      const paymentIntentPayload = JSON.stringify({
+        id: `evt_e2e_dual_intent_${dualSuffix}`,
+        object: 'event',
+        type: 'payment_intent.succeeded',
+        data: {
+          object: {
+            id: paymentIntentId,
+            object: 'payment_intent',
+            amount_received: 2000,
+            metadata: { orderId: dualOrderId },
+          },
+        },
+      });
+
+      const sessionSignature = Stripe.webhooks.generateTestHeaderString({
+        payload: checkoutSessionPayload,
+        secret: webhookSecret,
+      });
+      const intentSignature = Stripe.webhooks.generateTestHeaderString({
+        payload: paymentIntentPayload,
+        secret: webhookSecret,
+      });
+
+      const results = await Promise.allSettled([
+        stripeWebhookService.handleEvent(
+          Buffer.from(checkoutSessionPayload),
+          sessionSignature,
+        ),
+        stripeWebhookService.handleEvent(
+          Buffer.from(paymentIntentPayload),
+          intentSignature,
+        ),
+      ]);
+
+      expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
+
+      const variant = await prisma.productVariant.findUniqueOrThrow({
+        where: { id: dualVariantId },
+      });
+      expect(variant.stock).toBe(4);
+
+      const paidHistoryCount = await prisma.orderStatusHistory.count({
+        where: { orderId: dualOrderId, status: OrderStatus.PAID },
+      });
+      expect(paidHistoryCount).toBe(1);
+
+      const finalOrder = await prisma.order.findUniqueOrThrow({
+        where: { id: dualOrderId },
+      });
+      expect(finalOrder.status).toBe(OrderStatus.PAID);
+    });
   });
 });

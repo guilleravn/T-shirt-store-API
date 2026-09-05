@@ -3,13 +3,17 @@ import { BadRequestException } from '@nestjs/common';
 import { StripeWebhookService } from './stripe-webhook.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StripeService } from './stripe/stripe.service';
-import { OrderStatus, PaymentMethod } from '../../generated/prisma/client';
+import {
+  OrderStatus,
+  PaymentMethod,
+  Prisma,
+} from '../../generated/prisma/client';
 
 function buildPrismaMock() {
   const prisma = {
     stripeEvent: { update: jest.fn() },
     payment: { update: jest.fn(), create: jest.fn(), updateMany: jest.fn() },
-    order: { findUniqueOrThrow: jest.fn(), update: jest.fn() },
+    order: { findUniqueOrThrow: jest.fn(), updateMany: jest.fn() },
     orderItem: { update: jest.fn() },
     orderStatusHistory: { create: jest.fn() },
     cart: { findUnique: jest.fn() },
@@ -20,6 +24,7 @@ function buildPrismaMock() {
   prisma.$transaction.mockImplementation(
     (callback: (tx: typeof prisma) => unknown) => callback(prisma),
   );
+  prisma.order.updateMany.mockResolvedValue({ count: 1 });
   return prisma;
 }
 
@@ -234,6 +239,25 @@ describe('StripeWebhookService', () => {
       });
     });
 
+    it('logs and skips instead of crashing when no payments row matches the PaymentIntent', async () => {
+      mockEvent();
+      prisma.payment.update.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('record not found', {
+          code: 'P2025',
+          clientVersion: 'test',
+        }),
+      );
+
+      await expect(
+        service.handleEvent(Buffer.from('{}'), 'sig'),
+      ).resolves.toBeUndefined();
+      expect(prisma.order.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(prisma.stripeEvent.update).toHaveBeenCalledWith({
+        where: { stripeEventId: 'evt_1' },
+        data: { processedAt: expect.any(Date) as Date },
+      });
+    });
+
     it('decrements stock, marks the order PAID, and clears the cart', async () => {
       mockEvent();
       prisma.payment.update.mockResolvedValue({
@@ -245,8 +269,8 @@ describe('StripeWebhookService', () => {
 
       await service.handleEvent(Buffer.from('{}'), 'sig');
 
-      expect(prisma.order.update).toHaveBeenCalledWith({
-        where: { id: 'order-1' },
+      expect(prisma.order.updateMany).toHaveBeenCalledWith({
+        where: { id: 'order-1', status: OrderStatus.PENDING },
         data: { status: OrderStatus.PAID },
       });
       expect(prisma.orderStatusHistory.create).toHaveBeenCalledWith({
@@ -278,8 +302,8 @@ describe('StripeWebhookService', () => {
 
       await service.handleEvent(Buffer.from('{}'), 'sig');
 
-      expect(prisma.order.update).toHaveBeenCalledWith({
-        where: { id: 'order-1' },
+      expect(prisma.order.updateMany).toHaveBeenCalledWith({
+        where: { id: 'order-1', status: OrderStatus.PENDING },
         data: { status: OrderStatus.PAID },
       });
       expect(prisma.orderStatusHistory.create).toHaveBeenCalledWith({
@@ -291,22 +315,26 @@ describe('StripeWebhookService', () => {
       expect(prisma.orderItem.update).not.toHaveBeenCalled();
     });
 
-    it('does not re-decrement stock when the order is already PAID (Payment Link dual-event)', async () => {
+    it('does not re-decrement stock when a concurrent Payment Link event already claimed PENDING->PAID', async () => {
       // A Payment Link purchase fires both checkout.session.completed and payment_intent.succeeded
       // for the same order (T-Shirt-constraints.sql) — R4 dedupes by stripeEventId, which does
       // nothing here since these are two distinct real events for the same underlying purchase.
+      // The conditional updateMany is the actual guard now, not the plain read: whichever event's
+      // transaction commits PAID first, the other's updateMany affects 0 rows.
       mockEvent();
       prisma.payment.update.mockResolvedValue({
         id: 'pay-1',
         method: PaymentMethod.PAYMENT_INTENT,
       });
-      prisma.order.findUniqueOrThrow.mockResolvedValue(
-        buildOrder({ status: OrderStatus.PAID }),
-      );
+      prisma.order.findUniqueOrThrow.mockResolvedValue(buildOrder());
+      prisma.order.updateMany.mockResolvedValue({ count: 0 });
 
       await service.handleEvent(Buffer.from('{}'), 'sig');
 
-      expect(prisma.order.update).not.toHaveBeenCalled();
+      expect(prisma.order.updateMany).toHaveBeenCalledWith({
+        where: { id: 'order-1', status: OrderStatus.PENDING },
+        data: { status: OrderStatus.PAID },
+      });
       expect(prisma.orderStatusHistory.create).not.toHaveBeenCalled();
       expect(prisma.cartItem.deleteMany).not.toHaveBeenCalled();
     });
