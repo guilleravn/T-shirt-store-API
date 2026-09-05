@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
   PayloadTooLargeException,
   UnsupportedMediaTypeException,
@@ -34,6 +35,8 @@ interface StoredImage {
 
 @Injectable()
 export class ProductImagesService {
+  private readonly logger = new Logger(ProductImagesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: S3ImageStorageService,
@@ -100,14 +103,15 @@ export class ProductImagesService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      await Promise.all(
-        imageIds.map((imageId, index) =>
-          tx.productImage.update({
-            where: { id: imageId },
-            data: { position: index },
-          }),
-        ),
-      );
+      // Sequential, not Promise.all: firing concurrent writes on one interactive transaction's
+      // client isn't a pattern Prisma supports safely — a single transaction serializes its own
+      // queries one at a time regardless, so there's no real parallelism to gain here anyway.
+      for (const [index, imageId] of imageIds.entries()) {
+        await tx.productImage.update({
+          where: { id: imageId },
+          data: { position: index },
+        });
+      }
     });
 
     const reordered = await this.prisma.productImage.findMany({
@@ -148,9 +152,19 @@ export class ProductImagesService {
     }
 
     // DB row goes first: a leftover S3 object if the delete call below fails is harmless, while
-    // the reverse order risks a DB row pointing at a key that no longer exists.
+    // the reverse order risks a DB row pointing at a key that no longer exists. The S3 call is
+    // best-effort on purpose — the DB row is already gone by the time it runs, so letting an S3
+    // failure propagate would surface a 500 for a delete that, from the product's point of view,
+    // already succeeded.
     await this.prisma.productImage.delete({ where: { id: imageId } });
-    await this.storage.delete(image.s3Key);
+    try {
+      await this.storage.delete(image.s3Key);
+    } catch (error) {
+      this.logger.error(
+        `Failed to delete S3 object ${image.s3Key} for removed image ${imageId}`,
+        error instanceof Error ? error.stack : error,
+      );
+    }
   }
 
   private toResponseDto(image: StoredImage): ProductImageResponseDto {
