@@ -71,31 +71,29 @@ export class CartService {
       throw new NotFoundException('Variant not found');
     }
 
-    const existing = await this.prisma.cartItem.findUnique({
-      where: {
-        cartId_productVariantId: {
-          cartId: cart.id,
-          productVariantId: dto.productVariantId,
+    // Atomic upsert (Postgres INSERT ... ON CONFLICT DO UPDATE), not a separate find-then-write —
+    // two concurrent adds of the same variant would otherwise both pass a stale "does a row exist
+    // yet" check and one would lose to the other's @@unique([cartId, productVariantId]) with an
+    // unhandled P2002 (product-likes.service.ts already solves the identical shape this way).
+    // assertPurchasable runs against the upsert's own returned (real, post-write) quantity, and
+    // its throw rolls the transaction back if that final quantity is no longer purchasable.
+    await this.prisma.$transaction(async (tx) => {
+      const item = await tx.cartItem.upsert({
+        where: {
+          cartId_productVariantId: {
+            cartId: cart.id,
+            productVariantId: dto.productVariantId,
+          },
         },
-      },
-    });
-    const resultingQuantity = (existing?.quantity ?? 0) + dto.quantity;
-    this.assertPurchasable(variant.product, variant, resultingQuantity);
-
-    if (existing) {
-      await this.prisma.cartItem.update({
-        where: { id: existing.id },
-        data: { quantity: resultingQuantity },
-      });
-    } else {
-      await this.prisma.cartItem.create({
-        data: {
+        create: {
           cartId: cart.id,
           productVariantId: dto.productVariantId,
           quantity: dto.quantity,
         },
+        update: { quantity: { increment: dto.quantity } },
       });
-    }
+      this.assertPurchasable(variant.product, variant, item.quantity);
+    });
 
     return this.getCart(userId);
   }
