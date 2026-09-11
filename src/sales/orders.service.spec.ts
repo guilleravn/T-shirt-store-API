@@ -969,4 +969,55 @@ describe('OrdersService', () => {
       expect(checkoutQueueService.enqueueRefund).not.toHaveBeenCalled();
     });
   });
+
+  describe('sweepExpiredPendingOrders', () => {
+    it('does nothing when no PENDING order is past the TTL', async () => {
+      prisma.order.findMany.mockResolvedValue([]);
+
+      await service.sweepExpiredPendingOrders();
+
+      expect(prisma.order.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('cancels each expired order, restores its stock, and writes history with no user', async () => {
+      const expiredOrder = buildOrder({
+        id: 'order-1',
+        status: OrderStatus.PENDING,
+      });
+      prisma.order.findMany.mockResolvedValue([{ id: 'order-1' }]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue(expiredOrder);
+
+      await service.sweepExpiredPendingOrders();
+
+      expect(prisma.order.updateMany).toHaveBeenCalledWith({
+        where: { id: 'order-1', status: OrderStatus.PENDING },
+        data: { status: OrderStatus.CANCELLED },
+      });
+      expect(prisma.orderStatusHistory.create).toHaveBeenCalledWith({
+        data: {
+          orderId: 'order-1',
+          status: OrderStatus.CANCELLED,
+          changedByUserId: null,
+          note: 'Automatically cancelled: payment window expired',
+        },
+      });
+      expect(prisma.productVariant.update).toHaveBeenCalledWith({
+        where: { id: 'var-1' },
+        data: { stock: { increment: 2 } },
+      });
+      expect(checkoutQueueService.enqueueRefund).not.toHaveBeenCalled();
+    });
+
+    it('skips an order that raced away from PENDING before the transaction ran', async () => {
+      prisma.order.findMany.mockResolvedValue([{ id: 'order-1' }]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue(
+        buildOrder({ id: 'order-1', status: OrderStatus.PAID }),
+      );
+
+      await service.sweepExpiredPendingOrders();
+
+      expect(prisma.order.updateMany).not.toHaveBeenCalled();
+      expect(prisma.orderStatusHistory.create).not.toHaveBeenCalled();
+    });
+  });
 });

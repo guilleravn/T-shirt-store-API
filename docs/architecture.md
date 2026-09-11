@@ -53,30 +53,34 @@ request at all:
   send, and a single failed send would have no business affecting whether the sale itself
   succeeds. Queued as one job per recipient, the sale commits independently and each send
   retries on its own.
-- **Refund initiation on order cancellation.** As decided in `business-invariants.md`'s
+- **Refund initiation on order cancellation** (built). As decided in `business-invariants.md`'s
   interpretation-assumptions table: calling Stripe's refund API synchronously inside the same
   transaction that commits the cancellation is the same dual-write problem R8 avoids for stock —
   if Stripe fails after the commit, or the commit fails after Stripe already refunded, the two
   systems disagree with nothing to reconcile them. Enqueuing the refund after the commit, and
   writing `payments.refunded_at` when it confirms, keeps the two writes separate and each
-  retryable on its own.
-- **Expired-`PENDING`-order cancellation sweep** (R5). Nothing about a client request naturally
-  triggers "go find orders that have been `PENDING` too long" — it has to run on a schedule. This
-  job is what releases an expired promo redemption slot.
+  retryable on its own. `OrdersService.cancel()` enqueues it; `CheckoutProcessor` runs it.
 
 What breaks without a queue: every one of these becomes a best-effort side effect bolted onto a
 request handler — either blocking the primary transaction (or the request) on a concern that
-isn't its job, or having no trigger at all (the sweep).
+isn't its job, or having no trigger at all.
 
 **Not queued:** refresh/reset-token cleanup (`DELETE` of expired and long-revoked rows) is a
 plain scheduled task on the worker, not a queued job — there's no per-item retry semantics it
-needs.
+needs. The **expired-`PENDING`-order cancellation sweep** (R5, built) is the same shape: nothing
+about a client request naturally triggers "go find orders that have been `PENDING` too long," so
+it runs as an `@nestjs/schedule` `@Cron(EVERY_5_MINUTES)` method directly on `OrdersService`
+(`sweepExpiredPendingOrders`) rather than a BullMQ job — a single idempotent per-tick sweep has no
+per-item retry semantics to gain from a queue either. It cancels any `PENDING` order older than
+30 minutes, restoring its stock and freeing its promo redemption slot the same way a user-
+initiated cancel does (shared via `OrdersService`'s private `performCancellation`).
 
 **Current state:** `@nestjs/bullmq` (BullMQ on Redis) is installed and wired for the two email
-jobs above (`src/email/`). The other three jobs (low-stock fan-out, refund initiation, expired-
-order sweep) are still only decided, not built — same current-state treatment as CASL in
-`coding-style.md`. There is no separate worker process yet; the queue's jobs run in the same
-process as the API until the deploy shape below is actually built.
+jobs above (`src/email/`) and refund initiation (`src/sales/queue/`). The expired-order sweep is
+built as a plain scheduled task (above). Only low-stock fan-out is still decided, not built — same
+current-state treatment as CASL in `coding-style.md`. There is no separate worker process yet;
+queued jobs and the sweep both run in the same process as the API until the deploy shape below is
+actually built.
 
 ## Deploy shape
 
