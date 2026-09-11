@@ -169,9 +169,12 @@ Held to the same standard: violating one of these is a bug, not a style preferen
 - **Password reset is rate-limited per account, not just per IP.** 3 requests/hour per account,
   10/hour per IP, enforced with the `(user_id, created_at)` index. The per-account limit is the
   one that matters — an attacker rotating IPs can otherwise keep flooding one victim's inbox.
-- **`ValidationPipe` runs with `whitelist: true` globally.** Fails as: without it, a client can
-  smuggle undeclared fields (e.g. `role`, `isActive`) into a create/update payload and have them
-  silently accepted if a service ever spreads the raw body instead of the validated DTO.
+- **`ValidationPipe` runs with `whitelist: true` and `forbidNonWhitelisted: true` globally**
+  (`src/app.config.ts`). Fails as: without `whitelist`, a client can smuggle undeclared fields
+  (e.g. `role`, `isActive`) into a create/update payload and have them silently accepted if a
+  service ever spreads the raw body instead of the validated DTO. `forbidNonWhitelisted` is what
+  makes an extra field a `400` rather than a silent strip — without it, the client gets no signal
+  that the field it sent was ignored.
 - **Every `/webhooks/stripe` request is signature-verified before any processing.** Fails as:
   skipping this lets anyone POST a fake `checkout.session.completed` and get free stock
   decrements and `PAID` orders with no payment ever made.

@@ -22,7 +22,7 @@ These are decided once, here, instead of repeated on every endpoint in the spec.
 | Resource IDs        | `uuid` format, in the path (`/products/{productId}`), never a numeric ID                                                                                                                                                                          |
 | Enums               | UPPERCASE strings, identical to the DB enum values (`order_status`, `discount_type`, `user_role`)                                                                                                                                                 |
 | Timestamps          | ISO 8601, UTC, `date-time` format — matches `timestamptz`                                                                                                                                                                                         |
-| Errors              | `application/problem+json`, RFC 7807 shape (`type`, `title`, `status`, `detail`, `code`, `requestId`, optional `errors[]`) on every 4xx/5xx                                                                                                       |
+| Errors              | Nest's default HTTP exception shape, unmodified: `{ statusCode, message, error }` on every 4xx/5xx. `message` is a single string, except `ValidationPipe` failures, which report one string per invalid field                                     |
 | Idempotency         | `POST /orders`, `POST /checkout/payment-link`, and `POST /checkout/payment-intent` each accept an optional `Idempotency-Key` header, to survive a double-click or a network retry without creating a duplicate order or duplicate payment attempt |
 
 ## Stripe webhook (`POST /webhooks/stripe`)

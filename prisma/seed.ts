@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import * as bcrypt from 'bcrypt';
 import { PrismaClient } from '../generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 
@@ -6,7 +7,24 @@ const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
 });
 
+// Dev-only seeded MANAGER — signup always creates CLIENT (see business-invariants.md), so this
+// is the only way to get a MANAGER account without hand-editing the DB.
+const SEED_MANAGER_PASSWORD = 'Manager123!';
+
 async function main() {
+  const managerPasswordHash = await bcrypt.hash(SEED_MANAGER_PASSWORD, 10);
+  await prisma.user.upsert({
+    where: { email: 'guichi.maldo@gmail.com' },
+    update: {},
+    create: {
+      email: 'guichi.maldo@gmail.com',
+      passwordHash: managerPasswordHash,
+      firstName: 'Guillermo',
+      lastName: 'Maldonado',
+      role: 'MANAGER',
+    },
+  });
+
   const categories = [
     { name: 'Basics', slug: 'basics' },
     { name: 'Graphic Tees', slug: 'graphic-tees' },

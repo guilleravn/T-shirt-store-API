@@ -99,3 +99,14 @@ schema:
 Application errors go to Sentry. The three queries above run on a schedule, alerting through
 whatever the deploy platform provides — naming a specific alerting product beyond that would be
 inventing detail for a project that isn't deployed yet.
+
+The Stripe webhook endpoint's event subscription (configured in the Stripe dashboard, not in this
+repo) must include `charge.refunded` alongside `payment_intent.succeeded` and
+`checkout.session.completed` — it's what confirms a refund that wasn't immediately `succeeded`
+(ACH/bank debit `pending`, or one flagged `requires_action`) once Stripe actually settles it.
+
+`ThrottlerModule` (`src/app.module.ts`) uses `@nestjs/throttler`'s in-memory storage, not the
+Redis instance already available for BullMQ. That's correct for the single-web-dyno target above
+— rate limits only need to hold per-instance until there's more than one. The moment the web
+process scales past one dyno, this needs a Redis-backed throttler storage or rate limits silently
+stop being enforced across instances.

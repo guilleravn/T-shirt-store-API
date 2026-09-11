@@ -5,21 +5,21 @@
 > those here.
 >
 > Goes stale if the module boundaries stop matching the domain areas in
-> [`business-invariants.md`](../rules/business-invariants.md), or if CASL is actually installed
-> (the current-state note below would then be wrong).
+> [`business-invariants.md`](../rules/business-invariants.md), or if `RolesGuard` itself starts
+> using CASL (the current-state note below would then be wrong).
 
 ## Module structure
 
 One Nest module per domain area, mirroring the ERD's `TableGroup`s rather than one module per
 table:
 
-| Nest module | Tables it owns |
-|---|---|
-| `AuthModule` | `users`, `refresh_tokens`, `password_reset_tokens` |
-| `CatalogModule` | `categories`, `products`, `product_categories`, `product_images`, `colors`, `sizes`, `product_variants` |
-| `EngagementModule` | `product_likes`, `carts`, `cart_items` |
-| `SalesModule` | `orders`, `order_items`, `order_status_history`, `payments`, `stripe_events`, checkout, webhooks |
-| `PromoModule` | `promo_codes`, `promo_redemptions` |
+| Nest module        | Tables it owns                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------- |
+| `AuthModule`       | `users`, `refresh_tokens`, `password_reset_tokens`                                                      |
+| `CatalogModule`    | `categories`, `products`, `product_categories`, `product_images`, `colors`, `sizes`, `product_variants` |
+| `EngagementModule` | `product_likes`, `carts`, `cart_items`                                                                  |
+| `SalesModule`      | `orders`, `order_items`, `order_status_history`, `payments`, `stripe_events`, checkout, webhooks        |
+| `PromoModule`      | `promo_codes`, `promo_redemptions`                                                                      |
 
 `CatalogModule` is one module, not five — products, variants, images, categories, colors and
 sizes are read and written together and share the same MANAGER-only write path.
@@ -28,20 +28,25 @@ sizes are read and written together and share the same MANAGER-only write path.
 
 The most frequent question, settled once:
 
-| Layer | Owns | Never contains |
-|---|---|---|
-| **Controller** | Route wiring, param/query decorators, calling one service method, HTTP status/headers | Business conditionals, direct Prisma calls |
-| **DTO** | Request/response shape, `class-validator` rules | Logic beyond validation/transformation |
-| **Guard** | Authentication, role/ability checks (CASL) — rejects the request before the handler runs | Rules about *this specific resource's state* (e.g. "can this particular order still be cancelled" is a service decision, not a guard's) |
-| **Service** | All business logic, transactions, Prisma calls | HTTP concerns — status codes, headers, `Request`/`Response` objects |
+| Layer          | Owns                                                                                     | Never contains                                                                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **Controller** | Route wiring, param/query decorators, calling one service method, HTTP status/headers    | Business conditionals, direct Prisma calls                                                                                              |
+| **DTO**        | Request/response shape, `class-validator` rules                                          | Logic beyond validation/transformation                                                                                                  |
+| **Guard**      | Authentication, role/ability checks (CASL) — rejects the request before the handler runs | Rules about _this specific resource's state_ (e.g. "can this particular order still be cancelled" is a service decision, not a guard's) |
+| **Service**    | All business logic, transactions, Prisma calls                                           | HTTP concerns — status codes, headers, `Request`/`Response` objects                                                                     |
 
 Concrete violation: `if (order.status === 'SHIPPED') throw ...` written inside a controller
 method violates the controller row above — that check belongs in the service, where the rest of
 the order's state is already being read.
 
-**Authorization current state:** the ERD's intended approach is CASL abilities in code (3 fixed
-roles, no permissions table — see `users` in `business-invariants.md`). `@casl/ability` is not
-yet in `package.json`; until it's added, guards enforce role checks directly.
+**Authorization current state:** `@casl/ability` is installed and used for Sales's per-resource
+(own-order) abilities — `src/sales/casl/order-ability.factory.ts`, wired into `OrdersService` and
+`CheckoutService` via `authorizeOrderAction`. Route-level role gating is a separate concern and
+stays a plain role comparison in `RolesGuard` — CASL decides "can this user act on _this specific_
+order" (ownership, assignment), never "does this role have access to this route at all", which
+`@Roles`/`RolesGuard` already answers before CASL ever runs. No other module has adopted CASL yet;
+their guards remain direct role checks (3 fixed roles, no permissions table — see `users` in
+`business-invariants.md`).
 
 ## Money
 
@@ -59,10 +64,10 @@ Integer minor units (cents), end to end — see R6 in `business-invariants.md`. 
 Prisma's `$transaction` (interactive form, for anything beyond a couple of independent writes).
 Each of these must be one transaction, tied to the invariant that requires it:
 
-| Writes | Why atomic |
-|---|---|
-| `orders.status` update + `order_status_history` insert | R2 — the two must never disagree |
-| Conditional stock `UPDATE` + order status update + `order_status_history` note | R3/R8 — a failure between the stock check and the order update must not leave a decremented-but-unrecorded state, or a `PAID` order with silently lost stock |
+| Writes                                                                                          | Why atomic                                                                                                                                                                                                       |
+| ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `orders.status` update + `order_status_history` insert                                          | R2 — the two must never disagree                                                                                                                                                                                 |
+| Conditional stock `UPDATE` + order status update + `order_status_history` note                  | R3/R8 — a failure between the stock check and the order update must not leave a decremented-but-unrecorded state, or a `PAID` order with silently lost stock                                                     |
 | `SELECT ... FOR UPDATE` on `promo_codes` + `promo_redemptions` insert + `orders.discount_cents` | R5 — the lock and the insert must be in the same transaction or the lock is pointless. `SELECT ... FOR UPDATE` needs `$queryRaw`/`$executeRaw` inside `$transaction`; Prisma's fluent API has no row-lock method |
 
 ## Errors

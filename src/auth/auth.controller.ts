@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
@@ -15,10 +16,14 @@ import { RefreshDto } from './dto/refresh.dto';
 import { SignOutDto } from './dto/sign-out.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 import { AuthTokensResponseDto } from './dto/auth-tokens-response.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { RolesGuard } from './guards/roles.guard';
+import { Roles } from './decorators/roles.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
+import { UserRole } from '../../generated/prisma/client';
 import type { User } from '../../generated/prisma/client';
 
 // No class-level route prefix: GET /me sits outside /auth per openapi.yaml, so every route
@@ -28,12 +33,16 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('auth/signup')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60 * 1000 } })
   @HttpCode(HttpStatus.CREATED)
   signUp(@Body() dto: SignUpDto): Promise<UserResponseDto> {
     return this.authService.signUp(dto);
   }
 
   @Post('auth/signin')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60 * 1000 } })
   @HttpCode(HttpStatus.OK)
   signIn(@Body() dto: SignInDto): Promise<AuthTokensResponseDto> {
     return this.authService.signIn(dto);
@@ -61,6 +70,8 @@ export class AuthController {
   }
 
   @Post('auth/reset-password')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60 * 60 * 1000 } })
   @HttpCode(HttpStatus.NO_CONTENT)
   resetPassword(@Body() dto: ResetPasswordDto): Promise<void> {
     return this.authService.resetPassword(dto);
@@ -70,5 +81,12 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   me(@CurrentUser() user: User): UserResponseDto {
     return new UserResponseDto(user);
+  }
+
+  @Get('users')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.MANAGER)
+  listUsers(@Query() query: ListUsersQueryDto) {
+    return this.authService.listUsers(query);
   }
 }

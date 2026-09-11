@@ -8,9 +8,11 @@ import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import type { User } from '../../../generated/prisma/client';
 
-// Direct role comparison — CASL isn't installed yet (coding-style.md's "Authorization current
-// state"). Must run after JwtAuthGuard in @UseGuards(JwtAuthGuard, RolesGuard): it reads
-// request.user, which only JwtAuthGuard sets.
+// Direct role comparison, on purpose — CASL is installed and used for Sales's per-order
+// (own-resource) abilities (src/sales/casl/order-ability.factory.ts), but route-level role
+// gating stays a plain check here; see coding-style.md's "Authorization current state". Must run
+// after JwtAuthGuard in @UseGuards(JwtAuthGuard, RolesGuard): it reads request.user, which only
+// JwtAuthGuard sets.
 @Injectable()
 export class RolesGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}

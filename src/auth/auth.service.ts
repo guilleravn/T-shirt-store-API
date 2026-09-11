@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -11,12 +12,15 @@ import * as bcrypt from 'bcrypt';
 import { Prisma, User } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
+import { PageMetaDto } from '../catalog/dto/page-meta.dto';
 import { SignUpDto } from './dto/sign-up.dto';
 import { SignInDto } from './dto/sign-in.dto';
 import { SignOutDto } from './dto/sign-out.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UserResponseDto } from './dto/user-response.dto';
+import { UserBriefResponseDto } from './dto/user-brief-response.dto';
+import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { AuthTokensResponseDto } from './dto/auth-tokens-response.dto';
 import { generateRawToken, hashToken } from './utils/token.util';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
@@ -27,6 +31,7 @@ const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 const PASSWORD_RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
 // business-invariants.md security invariant: 3 requests/hour per account.
 const PASSWORD_RESET_MAX_PER_HOUR = 3;
+const BCRYPT_COST_FACTOR = 10;
 
 @Injectable()
 export class AuthService {
@@ -44,7 +49,7 @@ export class AuthService {
   }
 
   async signUp(dto: SignUpDto): Promise<UserResponseDto> {
-    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const passwordHash = await bcrypt.hash(dto.password, BCRYPT_COST_FACTOR);
 
     let user: User;
     try {
@@ -88,29 +93,40 @@ export class AuthService {
   async refresh(dto: { refreshToken: string }): Promise<AuthTokensResponseDto> {
     const tokenHash = hashToken(dto.refreshToken);
 
-    return this.prisma.$transaction(async (tx) => {
-      const existing = await tx.refreshToken.findUnique({
-        where: { tokenHash },
+    const existing = await this.prisma.refreshToken.findUnique({
+      where: { tokenHash },
+    });
+    if (!existing) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    if (existing.revokedAt) {
+      // Reuse of an already-rotated token is the signal of theft (see
+      // business-invariants.md) — revoke every active session for this user, not just this one
+      // token. This runs and commits BEFORE the exception below, on purpose: throwing inside a
+      // $transaction would roll this update back along with everything else, silently undoing
+      // the revocation it exists to guarantee.
+      await this.prisma.refreshToken.updateMany({
+        where: { userId: existing.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
       });
-      if (!existing) {
-        throw new UnauthorizedException('Invalid refresh token');
-      }
+      throw new UnauthorizedException('Invalid refresh token');
+    }
 
-      if (existing.revokedAt) {
-        // Reuse of an already-rotated token is the signal of theft (see
-        // business-invariants.md) — revoke every active session for this user, not just this
-        // one token.
-        await tx.refreshToken.updateMany({
-          where: { userId: existing.userId, revokedAt: null },
-          data: { revokedAt: new Date() },
-        });
-        throw new UnauthorizedException('Invalid refresh token');
-      }
+    if (existing.expiresAt <= new Date()) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
 
+    return this.prisma.$transaction(async (tx) => {
       // Conditional UPDATE, not read-then-write: guards two concurrent /auth/refresh calls
-      // racing on the same row, same idiom R3 uses for stock.
+      // racing on the same row (same idiom R3 uses for stock), and closes the window where the
+      // token expires between the pre-check above and this write.
       const { count } = await tx.refreshToken.updateMany({
-        where: { id: existing.id, revokedAt: null },
+        where: {
+          id: existing.id,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
         data: { revokedAt: new Date() },
       });
       if (count !== 1) {
@@ -160,22 +176,36 @@ export class AuthService {
       return;
     }
 
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-    const recentCount = await this.prisma.passwordResetToken.count({
-      where: { userId: user.id, createdAt: { gte: oneHourAgo } },
+    const rawToken = await this.prisma.$transaction(async (tx) => {
+      // Serializes concurrent forgotPassword calls for the same account — without this, the
+      // count-then-create below is a plain read-then-write: two requests can both read a count
+      // under PASSWORD_RESET_MAX_PER_HOUR and both insert, landing above the documented cap
+      // (business-invariants.md's security invariants). pg_advisory_xact_lock is released
+      // automatically when the transaction ends, commit or rollback, so there's nothing to clean
+      // up on the early-return path below.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${user.id}))`;
+
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      const recentCount = await tx.passwordResetToken.count({
+        where: { userId: user.id, createdAt: { gte: oneHourAgo } },
+      });
+      if (recentCount >= PASSWORD_RESET_MAX_PER_HOUR) {
+        return null;
+      }
+
+      const token = generateRawToken();
+      await tx.passwordResetToken.create({
+        data: {
+          userId: user.id,
+          tokenHash: hashToken(token),
+          expiresAt: new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS),
+        },
+      });
+      return token;
     });
-    if (recentCount >= PASSWORD_RESET_MAX_PER_HOUR) {
+    if (!rawToken) {
       return;
     }
-
-    const rawToken = generateRawToken();
-    await this.prisma.passwordResetToken.create({
-      data: {
-        userId: user.id,
-        tokenHash: hashToken(rawToken),
-        expiresAt: new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS),
-      },
-    });
 
     await this.emailQueueService.enqueuePasswordResetEmail({
       to: user.email,
@@ -186,14 +216,14 @@ export class AuthService {
 
   async resetPassword(dto: ResetPasswordDto): Promise<void> {
     const tokenHash = hashToken(dto.token);
-    const passwordHash = await bcrypt.hash(dto.newPassword, 10);
+    const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_COST_FACTOR);
 
     const user = await this.prisma.$transaction(async (tx) => {
       const resetToken = await tx.passwordResetToken.findUnique({
         where: { tokenHash },
       });
       if (!resetToken) {
-        throw new UnauthorizedException('Invalid or expired token');
+        throw new BadRequestException('Invalid or expired token');
       }
 
       // Conditional UPDATE: prevents two concurrent submissions of the same token both
@@ -207,7 +237,7 @@ export class AuthService {
         data: { usedAt: new Date() },
       });
       if (count !== 1) {
-        throw new UnauthorizedException('Invalid or expired token');
+        throw new BadRequestException('Invalid or expired token');
       }
 
       const updatedUser = await tx.user.update({
@@ -232,6 +262,30 @@ export class AuthService {
       to: user.email,
       firstName: user.firstName,
     });
+  }
+
+  async listUsers(
+    query: ListUsersQueryDto,
+  ): Promise<{ data: UserBriefResponseDto[]; meta: PageMetaDto }> {
+    const where: Prisma.UserWhereInput = { role: query.role };
+    const limit = query.limit ?? 20;
+    const offset = query.offset ?? 0;
+
+    const [total, users] = await Promise.all([
+      this.prisma.user.count({ where }),
+      this.prisma.user.findMany({
+        where,
+        select: { id: true, firstName: true, lastName: true },
+        orderBy: { firstName: 'asc' },
+        skip: offset,
+        take: limit,
+      }),
+    ]);
+
+    return {
+      data: users.map((user) => new UserBriefResponseDto(user)),
+      meta: new PageMetaDto({ total, limit, offset }),
+    };
   }
 
   private async issueTokens(

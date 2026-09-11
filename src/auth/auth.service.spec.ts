@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
@@ -11,7 +12,7 @@ import * as bcrypt from 'bcrypt';
 import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
-import { Prisma } from '../../generated/prisma/client';
+import { Prisma, UserRole } from '../../generated/prisma/client';
 import { hashToken } from './utils/token.util';
 
 function buildPrismaMock() {
@@ -19,6 +20,8 @@ function buildPrismaMock() {
     user: {
       create: jest.fn(),
       findUnique: jest.fn(),
+      findMany: jest.fn(),
+      count: jest.fn(),
       update: jest.fn(),
     },
     refreshToken: {
@@ -32,6 +35,7 @@ function buildPrismaMock() {
       findUnique: jest.fn(),
       updateMany: jest.fn(),
     },
+    $executeRaw: jest.fn(),
     $transaction: jest.fn(),
   };
   // Every test reuses the same mock as the transaction client — this is a unit test of
@@ -186,7 +190,11 @@ describe('AuthService', () => {
       expect(result.accessToken).toBe('signed.jwt.token');
       expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: existing.id, revokedAt: null },
+          where: {
+            id: existing.id,
+            revokedAt: null,
+            expiresAt: { gt: expect.any(Date) as Date },
+          },
         }),
       );
     });
@@ -196,6 +204,49 @@ describe('AuthService', () => {
 
       await expect(service.refresh({ refreshToken: 'nope' })).rejects.toThrow(
         UnauthorizedException,
+      );
+    });
+
+    it('rejects an expired token before even opening the transaction', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        id: 'rt-1',
+        userId: baseUser.id,
+        tokenHash: hashToken('raw-token'),
+        revokedAt: null,
+        expiresAt: new Date(Date.now() - 1000),
+        createdAt: new Date(),
+      });
+
+      await expect(
+        service.refresh({ refreshToken: 'raw-token' }),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('closes the row on rotation with an expiresAt-in-the-future condition, not just id/revokedAt', async () => {
+      const existing = {
+        id: 'rt-1',
+        userId: baseUser.id,
+        tokenHash: hashToken('raw-token'),
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 1000),
+        createdAt: new Date(),
+      };
+      prisma.refreshToken.findUnique.mockResolvedValue(existing);
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+      prisma.user.findUnique.mockResolvedValue(baseUser);
+      prisma.refreshToken.create.mockResolvedValue({});
+
+      await service.refresh({ refreshToken: 'raw-token' });
+
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            id: existing.id,
+            revokedAt: null,
+            expiresAt: { gt: expect.any(Date) as Date },
+          },
+        }),
       );
     });
 
@@ -219,6 +270,9 @@ describe('AuthService', () => {
           where: { userId: baseUser.id, revokedAt: null },
         }),
       );
+      // The revocation must not run inside $transaction: a throw there would roll it back along
+      // with everything else, silently undoing the exact thing this path exists to guarantee.
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('rejects when it loses the race to revoke the row (concurrent refresh)', async () => {
@@ -311,6 +365,16 @@ describe('AuthService', () => {
       );
     });
 
+    it('takes a per-account advisory lock before counting, to close the concurrent-request race', async () => {
+      prisma.user.findUnique.mockResolvedValue(baseUser);
+      prisma.passwordResetToken.count.mockResolvedValue(0);
+      prisma.passwordResetToken.create.mockResolvedValue({});
+
+      await service.forgotPassword({ email: baseUser.email });
+
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    });
+
     it('stops silently once the per-account rate limit (3/hour) is hit', async () => {
       prisma.user.findUnique.mockResolvedValue(baseUser);
       prisma.passwordResetToken.count.mockResolvedValue(3);
@@ -365,7 +429,7 @@ describe('AuthService', () => {
           token: 'nope',
           newPassword: 'NuevaSuperSegura123',
         }),
-      ).rejects.toThrow(UnauthorizedException);
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('rejects an expired or already-used token', async () => {
@@ -384,7 +448,38 @@ describe('AuthService', () => {
           token: 'raw-reset-token',
           newPassword: 'NuevaSuperSegura123',
         }),
-      ).rejects.toThrow(UnauthorizedException);
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('listUsers', () => {
+    it('filters by role and maps to the brief shape only', async () => {
+      prisma.user.count.mockResolvedValue(1);
+      prisma.user.findMany.mockResolvedValue([
+        { id: 'delivery-1', firstName: 'Dan', lastName: 'Delivery' },
+      ]);
+
+      const result = await service.listUsers({
+        role: UserRole.DELIVERY,
+        limit: 20,
+        offset: 0,
+      });
+
+      expect(prisma.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { role: 'DELIVERY' },
+          select: { id: true, firstName: true, lastName: true },
+        }),
+      );
+      expect(result.data).toEqual([
+        { id: 'delivery-1', firstName: 'Dan', lastName: 'Delivery' },
+      ]);
+      expect(result.meta).toEqual({
+        total: 1,
+        limit: 20,
+        offset: 0,
+        hasMore: false,
+      });
     });
   });
 });
