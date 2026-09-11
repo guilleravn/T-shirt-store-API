@@ -3,8 +3,10 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import {
   OrderStatus,
   PaymentStatus,
@@ -86,8 +88,13 @@ const ORDER_DETAIL_INCLUDE = {
   payments: { orderBy: { createdAt: 'desc' } },
 } as const;
 
+type OrderWithItems = Prisma.OrderGetPayload<{ include: { items: true } }>;
+
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+  private static readonly PENDING_ORDER_TTL_MS = 30 * 60 * 1000;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly orderAbilityFactory: OrderAbilityFactory,
@@ -409,41 +416,15 @@ export class OrdersService {
         throw new ConflictException('Order can no longer be cancelled');
       }
 
-      // Conditional on the status just read, not a plain update — this is what makes the write
-      // itself acquire the row lock atomically with the check above. It's also what
-      // checkout.service.ts's createPaymentIntent relies on: its own SELECT ... FOR UPDATE only
-      // closes its half of that race if this side's write is guaranteed to wait on the same lock
-      // instead of writing straight past it.
-      const { count } = await tx.order.updateMany({
-        where: { id: orderId, status: currentOrder.status },
-        data: { status: OrderStatus.CANCELLED },
-      });
-      if (count === 0) {
+      const cancelled = await this.performCancellation(
+        tx,
+        orderId,
+        currentOrder,
+        user.id,
+        dto.reason,
+      );
+      if (!cancelled) {
         throw new ConflictException('Order can no longer be cancelled');
-      }
-      await tx.orderStatusHistory.create({
-        data: {
-          orderId,
-          status: OrderStatus.CANCELLED,
-          changedByUserId: user.id,
-          note: dto.reason,
-        },
-      });
-
-      // Only lines that actually had stock taken (R8: an oversold line never did) get restored
-      // — restoring every line unconditionally would phantom-inflate stock for one that was
-      // never really decremented.
-      for (const item of currentOrder.items) {
-        if (item.stockDecremented) {
-          await tx.productVariant.update({
-            where: { id: item.productVariantId },
-            data: { stock: { increment: item.quantity } },
-          });
-          await tx.orderItem.update({
-            where: { id: item.id },
-            data: { stockDecremented: false },
-          });
-        }
       }
 
       return tx.payment.findFirst({
@@ -462,6 +443,93 @@ export class OrdersService {
     }
 
     return this.detail(orderId, user);
+  }
+
+  // Shared by cancel() (a user action, CASL-checked, may owe a refund) and the expiry sweep
+  // below (a system action, no user, never owes a refund) — same conditional-update-plus-
+  // history-plus-stock-restore mechanism either way, so there is exactly one place that does it.
+  private async performCancellation(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    currentOrder: OrderWithItems,
+    changedByUserId: string | null,
+    note: string | undefined,
+  ): Promise<boolean> {
+    // Conditional on the status just read — this is what acquires the row lock atomically
+    // with the caller's check, which checkout.service.ts's createPaymentIntent also relies on
+    // (its own SELECT ... FOR UPDATE only closes its half of that race if this write is
+    // guaranteed to wait on the same lock instead of writing straight past it).
+    const { count } = await tx.order.updateMany({
+      where: { id: orderId, status: currentOrder.status },
+      data: { status: OrderStatus.CANCELLED },
+    });
+    if (count === 0) {
+      return false;
+    }
+    await tx.orderStatusHistory.create({
+      data: {
+        orderId,
+        status: OrderStatus.CANCELLED,
+        changedByUserId,
+        note,
+      },
+    });
+
+    // Only lines that actually had stock taken (R8: an oversold line never did) get restored
+    // — restoring every line unconditionally would phantom-inflate stock for one that was
+    // never really decremented.
+    for (const item of currentOrder.items) {
+      if (item.stockDecremented) {
+        await tx.productVariant.update({
+          where: { id: item.productVariantId },
+          data: { stock: { increment: item.quantity } },
+        });
+        await tx.orderItem.update({
+          where: { id: item.id },
+          data: { stockDecremented: false },
+        });
+      }
+    }
+    return true;
+  }
+
+  // R5: frees a promo redemption slot an abandoned cart would otherwise block forever, since
+  // usage is a live count that only excludes CANCELLED orders (business-invariants.md).
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async sweepExpiredPendingOrders(): Promise<void> {
+    const cutoff = new Date(Date.now() - OrdersService.PENDING_ORDER_TTL_MS);
+    const expired = await this.prisma.order.findMany({
+      where: { status: OrderStatus.PENDING, createdAt: { lt: cutoff } },
+      select: { id: true },
+    });
+    for (const { id } of expired) {
+      await this.cancelExpiredPendingOrder(id);
+    }
+  }
+
+  private async cancelExpiredPendingOrder(orderId: string): Promise<void> {
+    // No refund path here, unlike cancel(): a PENDING order can never have a SUCCEEDED payment
+    // — the webhook only ever moves a payment to SUCCEEDED together with the order to PAID, in
+    // one transaction (R2/R4) — so there is nothing to refund by definition.
+    const cancelled = await this.prisma.$transaction(async (tx) => {
+      const currentOrder = await tx.order.findUniqueOrThrow({
+        where: { id: orderId },
+        include: { items: true },
+      });
+      if (currentOrder.status !== OrderStatus.PENDING) {
+        return false; // raced with the webhook or a user-initiated cancel — no longer ours
+      }
+      return this.performCancellation(
+        tx,
+        orderId,
+        currentOrder,
+        null,
+        'Automatically cancelled: payment window expired',
+      );
+    });
+    if (cancelled) {
+      this.logger.log(`Sweep cancelled expired PENDING order ${orderId}`);
+    }
   }
 
   private fetchOrderDetail(orderId: string) {
