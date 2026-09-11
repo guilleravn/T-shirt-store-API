@@ -164,6 +164,14 @@ Held to the same standard: violating one of these is a bug, not a style preferen
   `revoked_at` and inserts a new row; revoked rows are kept, not deleted, so a second use of an
   already-rotated token is detectable — that reuse is the signal of theft (RFC 9700 requires
   rotation or sender-constraining for public clients).
+- **Refresh tokens are rejected once expired.** Checked both before and inside the rotation
+  transaction (`src/auth/auth.service.ts` — a conditional `UPDATE ... WHERE expires_at > now()`,
+  same idiom R3 uses for stock). Fails as: without the in-transaction recheck, a token that
+  expires in the window between the pre-check and the write could still rotate successfully and
+  stay valid forever.
+- **Signup and signin are rate-limited per IP** (`ThrottlerGuard`: 5 signups/minute, 10
+  signins/minute). Fails as: without it, scripted mass account creation or credential stuffing
+  against signin has no cost.
 - **Password reset tokens are single-use.** `used_at` marks consumption; no successor row is
   created. Completing a reset revokes all of that user's `refresh_tokens`.
 - **Password reset is rate-limited per account, not just per IP.** 3 requests/hour per account,
