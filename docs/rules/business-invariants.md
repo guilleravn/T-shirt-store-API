@@ -70,9 +70,11 @@ one: payment confirmed, stock never decremented, and no retry ever arrives to fi
 ## R5 — promo usage is counted under a row lock
 
 **Requires:** before inserting a `promo_redemptions` row,
-`SELECT ... FROM promo_codes WHERE id = $1 FOR UPDATE` locks the coupon row. Usage is counted by
+`SELECT ... FROM promo_codes WHERE code = $1 FOR UPDATE` locks the coupon row. Usage is counted by
 joining `promo_redemptions` to `orders` with `status <> CANCELLED`, never from a stored counter.
-A job cancels expired `PENDING` orders and frees their redemption.
+`OrdersService.sweepExpiredPendingOrders` (an `@Cron(EVERY_5_MINUTES)` scheduled method, see
+`docs/architecture.md`) cancels `PENDING` orders older than 30 minutes, which frees their
+redemption the moment `status` flips to `CANCELLED`.
 
 **Protects:** `usage_limit` is enforced correctly under concurrent checkouts.
 
