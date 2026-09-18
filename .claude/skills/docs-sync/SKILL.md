@@ -27,13 +27,16 @@ flagging it.
    | `PromoModule`      | `openapi.yaml` (`/promo-codes*`), `docs/rules/business-invariants.md` R5/R6                                                                  |
 
    Any `prisma/schema.prisma` change, regardless of module, also maps to
-   `docs/reference/erd/T-Shirt.dbml` and `docs/reference/data-model.md`.
+   `docs/reference/erd/T-Shirt.dbml` and `docs/reference/data-model.md`. Any
+   `src/config/env.validation.ts` change, regardless of module, maps to `.env.example`.
 
 3. **For each canonical doc in scope, compare its current text to the implementation:**
    - New or changed endpoint → the DTO's request/response shape must match `openapi.yaml`'s
      schema exactly (required/optional fields, types, status codes).
    - Schema change → `docs/reference/erd/T-Shirt.dbml` must reflect it in the same slice (this is
      a hard rule in `CLAUDE.md` — a drifted ERD makes `business-invariants.md` unverifiable).
+   - `env.validation.ts` change → every key marked `.required()` must have a placeholder line in
+     `.env.example` — a fresh clone following the example file has to actually be able to boot.
    - A capability described as "planned," "decided but not built," or similar in
      `docs/architecture.md` or `docs/rules/business-invariants.md` that the diff now implements →
      update that status to reflect it's built, and say where.
