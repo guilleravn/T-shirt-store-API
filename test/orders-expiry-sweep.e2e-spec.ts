@@ -59,8 +59,11 @@ describe('Orders / expired PENDING order sweep (e2e)', () => {
     });
     colorId = color.id;
 
+    // position is globally unique — 9100 was already taken by orders.e2e-spec.ts, causing a
+    // real collision under Jest's parallel workers. Every sibling e2e file stakes out its own
+    // literal (9000, 9200...9700); this one takes the next unused slot.
     const size = await prisma.size.create({
-      data: { name: `E2E-${suffix}`, position: 9100 },
+      data: { name: `E2E-${suffix}`, position: 9800 },
     });
     sizeId = size.id;
 
