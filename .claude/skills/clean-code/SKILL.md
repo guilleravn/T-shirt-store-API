@@ -1,6 +1,9 @@
 ---
 name: clean-code
 description: Review a diff for readability and simplification against this repo's explicit style rules in CLAUDE.md — redundant comments, oversized comment blocks, premature abstractions, speculative error handling, unclear naming, dead code — then apply the fixes. Use before committing, or whenever asked to clean up or simplify a change.
+argument-hint: [scope]
+disable-model-invocation: true
+allowed-tools: Read, Grep, Glob, Edit, Bash(npm run build:*, npm test:*)
 ---
 
 # Clean code

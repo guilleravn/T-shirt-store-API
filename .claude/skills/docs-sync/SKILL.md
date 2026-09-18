@@ -1,6 +1,9 @@
 ---
 name: docs-sync
 description: Compare a changed feature or module against its documentation (openapi.yaml, docs/reference/*, docs/rules/business-invariants.md, docs/architecture.md, docs/reference/erd/T-Shirt.dbml) and update the affected sections. Use after implementing a feature or fix, before committing, to catch documentation drift.
+argument-hint: [scope]
+disable-model-invocation: true
+allowed-tools: Read, Grep, Glob, Edit, Bash(git diff:*)
 ---
 
 # Docs sync

@@ -1,6 +1,9 @@
 ---
 name: quality-gate
 description: Run build, lint, and tests, then check the diff against docs/conventions/coding-style.md's module/layer conventions and the money-as-integer-cents rule, reporting PASS/FAIL per check. Use before committing a slice, or whenever asked to verify a change is clean and ready to commit.
+argument-hint: [scope]
+allowed-tools: Bash, Read, Grep, Glob
+context: fork
 ---
 
 # Quality gate

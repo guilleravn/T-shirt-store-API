@@ -1,6 +1,9 @@
 ---
 name: nest-patterns
 description: Check a diff for correct NestJS mechanics — constructor DI, decorator usage, module registration, and guard/pipe order — as distinct from where business logic belongs. Use whenever a change adds or edits a controller, provider, guard, or module.
+argument-hint: [scope]
+allowed-tools: Read, Grep, Glob
+paths: src/**/*.controller.ts, src/**/*.service.ts, src/**/*.guard.ts, src/**/*.module.ts, src/**/*.factory.ts
 ---
 
 # Nest patterns
