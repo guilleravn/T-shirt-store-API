@@ -979,10 +979,24 @@ describe('OrdersService', () => {
       expect(prisma.order.updateMany).not.toHaveBeenCalled();
     });
 
-    it('cancels each expired order, restores its stock, and writes history with no user', async () => {
+    it('cancels each expired order and writes history with no user', async () => {
+      // stockDecremented: false, not buildOrder's default true — a real PENDING order can never
+      // have decremented stock (only the webhook sets that flag, on the way out of PENDING), so
+      // this fixture matches what the sweep actually ever sees in production.
       const expiredOrder = buildOrder({
         id: 'order-1',
         status: OrderStatus.PENDING,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'var-1',
+            productName: 'Classic Tee',
+            variantLabel: 'Black / M',
+            quantity: 2,
+            unitPriceCents: 1500,
+            stockDecremented: false,
+          },
+        ],
       });
       prisma.order.findMany.mockResolvedValue([{ id: 'order-1' }]);
       prisma.order.findUniqueOrThrow.mockResolvedValue(expiredOrder);
@@ -1001,11 +1015,32 @@ describe('OrdersService', () => {
           note: 'Automatically cancelled: payment window expired',
         },
       });
-      expect(prisma.productVariant.update).toHaveBeenCalledWith({
-        where: { id: 'var-1' },
-        data: { stock: { increment: 2 } },
-      });
       expect(checkoutQueueService.enqueueRefund).not.toHaveBeenCalled();
+    });
+
+    it('never writes a stock change for a swept PENDING order (stock was never decremented)', async () => {
+      const expiredOrder = buildOrder({
+        id: 'order-1',
+        status: OrderStatus.PENDING,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'var-1',
+            productName: 'Classic Tee',
+            variantLabel: 'Black / M',
+            quantity: 2,
+            unitPriceCents: 1500,
+            stockDecremented: false,
+          },
+        ],
+      });
+      prisma.order.findMany.mockResolvedValue([{ id: 'order-1' }]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue(expiredOrder);
+
+      await service.sweepExpiredPendingOrders();
+
+      expect(prisma.productVariant.update).not.toHaveBeenCalled();
+      expect(prisma.orderItem.update).not.toHaveBeenCalled();
     });
 
     it('skips an order that raced away from PENDING before the transaction ran', async () => {

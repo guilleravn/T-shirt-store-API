@@ -9,6 +9,8 @@ import { CheckoutQueueService } from '../src/sales/queue/checkout-queue.service'
 import {
   DiscountType,
   OrderStatus,
+  PaymentMethod,
+  PaymentStatus,
   UserRole,
 } from '../generated/prisma/client';
 
@@ -108,6 +110,11 @@ describe('Orders / expired PENDING order sweep (e2e)', () => {
   });
 
   afterAll(async () => {
+    // payments.order_id is onDelete: Restrict — must go before the orders that own them, unlike
+    // the sibling e2e files here that never create a Payment row directly.
+    await prisma.payment.deleteMany({
+      where: { order: { userId: { in: userIds } } },
+    });
     await prisma.order.deleteMany({ where: { userId: { in: userIds } } });
     await prisma.user.deleteMany({ where: { id: { in: userIds } } });
     await prisma.promoCode.deleteMany({ where: { code: promoCode } });
@@ -147,6 +154,9 @@ describe('Orders / expired PENDING order sweep (e2e)', () => {
     });
     expect(sweptOrder.status).toBe(OrderStatus.CANCELLED);
 
+    // A PENDING order's stock was never decremented in the first place (only the webhook, on
+    // the way out of PENDING, ever does that) — this confirms the sweep doesn't corrupt stock,
+    // not that it "restored" anything.
     const variant = await prisma.productVariant.findUniqueOrThrow({
       where: { id: variantId },
     });
@@ -170,6 +180,51 @@ describe('Orders / expired PENDING order sweep (e2e)', () => {
       userIds.map((id) => prisma.user.findUniqueOrThrow({ where: { id } })),
     );
     const order = await ordersService.create(userA, {});
+
+    await ordersService.sweepExpiredPendingOrders();
+
+    const untouched = await prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+    });
+    expect(untouched.status).toBe(OrderStatus.PENDING);
+  });
+
+  it('does not sweep an expired order with a live payment attempt', async () => {
+    // A dedicated user, not `a`/`b` — both already carry a PENDING order left over from the
+    // tests above, and the one-pending-order-per-user constraint would reject a second one.
+    const userC = await prisma.user.create({
+      data: {
+        email: `e2e-expiry-c-${suffix}@example.com`,
+        passwordHash: 'not-a-real-hash',
+        firstName: 'E2E',
+        lastName: 'Expiry',
+        role: UserRole.CLIENT,
+      },
+    });
+    userIds.push(userC.id);
+    const cartC = await prisma.cart.create({ data: { userId: userC.id } });
+    await prisma.cartItem.create({
+      data: { cartId: cartC.id, productVariantId: variantId, quantity: 1 },
+    });
+
+    const order = await ordersService.create(userC, {});
+
+    await prisma.order.update({
+      where: { id: order.id },
+      data: { createdAt: new Date(Date.now() - 31 * 60 * 1000) },
+    });
+    // Simulate a buyer mid-checkout: a real PaymentIntent attempt exists for this order, not yet
+    // succeeded or failed. Sweeping it here would let that payment complete against an order
+    // nothing would ever fulfill or refund (the bug this guard exists to prevent).
+    await prisma.payment.create({
+      data: {
+        orderId: order.id,
+        method: PaymentMethod.PAYMENT_INTENT,
+        stripeReferenceId: `pi_${randomUUID()}`,
+        amountCents: order.totalCents,
+        status: PaymentStatus.PENDING,
+      },
+    });
 
     await ordersService.sweepExpiredPendingOrders();
 

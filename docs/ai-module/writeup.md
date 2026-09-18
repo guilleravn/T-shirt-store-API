@@ -6,8 +6,9 @@
 repo's process — commits stay local until then).
 **Starting commit:** `114acfd` (`Fix/code review (#13)`).
 **Improvement:** Built `OrdersService.sweepExpiredPendingOrders`, a `@Cron(EVERY_5_MINUTES)`
-scheduled job that cancels `PENDING` orders older than 30 minutes, restoring their stock. This
-closes a gap `docs/rules/business-invariants.md` R5 already documented but that was never built:
+scheduled job that cancels `PENDING` orders older than 30 minutes with no live payment attempt.
+This closes a gap `docs/rules/business-invariants.md` R5 already documented but that was never
+built:
 an abandoned cart with a promo code applied blocked that code's redemption slot forever, since
 promo usage is a live count that only excludes `CANCELLED` orders — nothing ever cancelled a
 stale `PENDING` order. Know it works: `test/orders-expiry-sweep.e2e-spec.ts` reproduces the block

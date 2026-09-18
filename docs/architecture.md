@@ -72,8 +72,10 @@ about a client request naturally triggers "go find orders that have been `PENDIN
 it runs as an `@nestjs/schedule` `@Cron(EVERY_5_MINUTES)` method directly on `OrdersService`
 (`sweepExpiredPendingOrders`) rather than a BullMQ job — a single idempotent per-tick sweep has no
 per-item retry semantics to gain from a queue either. It cancels any `PENDING` order older than
-30 minutes, restoring its stock and freeing its promo redemption slot the same way a user-
-initiated cancel does (shared via `OrdersService`'s private `performCancellation`).
+30 minutes with no live payment attempt (a real charge could still land on one otherwise),
+freeing its promo redemption slot via the same `performCancellation` mechanism `cancel()` uses —
+though for a `PENDING` order that mechanism's stock-restore step is always a no-op: stock is
+never decremented before a webhook moves an order out of `PENDING` in the first place.
 
 **Current state:** `@nestjs/bullmq` (BullMQ on Redis) is installed and wired for the two email
 jobs above (`src/email/`) and refund initiation (`src/sales/queue/`). The expired-order sweep is
