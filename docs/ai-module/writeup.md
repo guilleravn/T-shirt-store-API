@@ -65,20 +65,54 @@ since most were real but out of scope for a single, small improvement.
   `TypeError: ordersService.sweepExpiredPendingOrders is not a function` — written and run before
   commit `bcb3bca` existed.
 - After (green): same test, same command, passes.
-- **Real `quality-gate` run, fresh session, this branch's head** (dispatched to a Claude Code
-  agent with zero prior conversation context, satisfying the assignment's "run each skill in a
-  fresh session" requirement — full request/response in the session transcript, condensed here):
+- **`quality-gate` in a fresh session** (dispatched to a Claude Code agent with zero prior
+  conversation context, satisfying the assignment's "run each skill in a fresh session"
+  requirement): it ran the four checks and, on `npm run test:e2e`, caught a real, reproducible
+  bug — `orders-expiry-sweep.e2e-spec.ts` and `orders.e2e-spec.ts` both hardcoded
+  `Size.position: 9100` (a globally-unique column), colliding under Jest's default parallel
+  workers. Fixed in commit `575bfb6` (takes the next unused literal, `9800`, matching every
+  sibling e2e file's own staggered-numbering convention). The same agent also tried `/docs-sync`:
+  it correctly refused via the Skill tool (`disable-model-invocation: true`), itself evidence the
+  frontmatter hardening works as designed.
 
-  | Check              | Status           | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-  | ------------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | `npm run build`    | PASS             | `nest build` completes with no errors                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-  | `npm run lint`     | PASS             | no issues                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-  | `npm test`         | PASS             | 22 suites / 263 tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-  | `npm run test:e2e` | FAIL, then fixed | Found a real, reproducible bug: `orders-expiry-sweep.e2e-spec.ts` and `orders.e2e-spec.ts` both hardcoded `Size.position: 9100` (a globally-unique column) — colliding whenever Jest's default parallel workers ran them together. Fixed in commit `575bfb6` (this e2e file now takes the next unused literal, `9800`, matching the staggered-numbering convention every sibling e2e file already uses). Re-verified twice after the fix: `npm run test:e2e` → 11/11 suites, 24/24 tests, clean under Jest's **default parallel** workers — no `--runInBand` needed. |
+- **Re-run directly, at this branch's head, after that fix — actual terminal output and exit
+  codes** (not a restated summary):
 
-  The agent also tried `/docs-sync` in the same fresh session: it correctly refused
-  (`disable-model-invocation: true` blocks Skill-tool invocation entirely, by design — see
-  `review-response.md`), which is itself evidence the frontmatter hardening works as intended.
+  ```
+  $ npm run build
+  > T-shirt-store-API@0.0.1 build
+  > nest build
+  EXIT_CODE=0
+
+  $ npm run lint
+  > T-shirt-store-API@0.0.1 lint
+  > eslint "{src,apps,libs,test}/**/*.ts"
+  EXIT_CODE=0
+
+  $ npm test
+  ...
+  Test Suites: 22 passed, 22 total
+  Tests:       263 passed, 263 total
+  Snapshots:   0 total
+  Time:        3.758 s
+  Ran all test suites.
+  EXIT_CODE=0
+
+  $ npm run docker:up
+   Container tshirt-store-redis Running
+   Container tshirt-store-db Running
+
+  $ npm run test:e2e
+  ...
+  Test Suites: 11 passed, 11 total
+  Tests:       24 passed, 24 total
+  Snapshots:   0 total
+  Time:        7.741 s
+  Ran all test suites.
+  EXIT_CODE=0
+  ```
+
+  All four exit 0, under Jest's **default parallel** workers for e2e — no `--runInBand` needed.
 
 - `quality-gate`'s convention check and `nest-patterns`' full checklist both ran clean against the
   sweep's own diff before each commit (see commits `054f855` through `575bfb6`).

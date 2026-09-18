@@ -282,6 +282,9 @@ export class StripeWebhookService {
     orderId: string,
     payment: Pick<Payment, 'id' | 'stripeReferenceId'>,
   ): Promise<RefundNeeded | null> {
+    // Re-read, not the `order` the caller already fetched: that read happened before the
+    // conditional updateMany above, so it can't tell CANCELLED from the still-PENDING state
+    // that read saw — only a fresh read reflects which of the two actually landed.
     const current = await tx.order.findUniqueOrThrow({
       where: { id: orderId },
       select: { status: true },
