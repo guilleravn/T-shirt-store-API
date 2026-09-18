@@ -70,9 +70,11 @@ one: payment confirmed, stock never decremented, and no retry ever arrives to fi
 ## R5 — promo usage is counted under a row lock
 
 **Requires:** before inserting a `promo_redemptions` row,
-`SELECT ... FROM promo_codes WHERE id = $1 FOR UPDATE` locks the coupon row. Usage is counted by
+`SELECT ... FROM promo_codes WHERE code = $1 FOR UPDATE` locks the coupon row. Usage is counted by
 joining `promo_redemptions` to `orders` with `status <> CANCELLED`, never from a stored counter.
-A job cancels expired `PENDING` orders and frees their redemption.
+`OrdersService.sweepExpiredPendingOrders` (an `@Cron(EVERY_5_MINUTES)` scheduled method, see
+`docs/architecture.md`) cancels `PENDING` orders older than 30 minutes, which frees their
+redemption the moment `status` flips to `CANCELLED`.
 
 **Protects:** `usage_limit` is enforced correctly under concurrent checkouts.
 
@@ -164,6 +166,14 @@ Held to the same standard: violating one of these is a bug, not a style preferen
   `revoked_at` and inserts a new row; revoked rows are kept, not deleted, so a second use of an
   already-rotated token is detectable — that reuse is the signal of theft (RFC 9700 requires
   rotation or sender-constraining for public clients).
+- **Refresh tokens are rejected once expired.** Checked both before and inside the rotation
+  transaction (`src/auth/auth.service.ts` — a conditional `UPDATE ... WHERE expires_at > now()`,
+  same idiom R3 uses for stock). Fails as: without the in-transaction recheck, a token that
+  expires in the window between the pre-check and the write could still rotate successfully and
+  stay valid forever.
+- **Signup and signin are rate-limited per IP** (`ThrottlerGuard`: 5 signups/minute, 10
+  signins/minute). Fails as: without it, scripted mass account creation or credential stuffing
+  against signin has no cost.
 - **Password reset tokens are single-use.** `used_at` marks consumption; no successor row is
   created. Completing a reset revokes all of that user's `refresh_tokens`.
 - **Password reset is rate-limited per account, not just per IP.** 3 requests/hour per account,

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -24,6 +25,7 @@ import { SalesModule } from './sales/sales.module';
         connection: { url: configService.get<string>('REDIS_URL') },
       }),
     }),
+    ScheduleModule.forRoot(),
     // Not registered as a global guard: only routes that opt in with @UseGuards(ThrottlerGuard)
     // are throttled (currently just POST /auth/forgot-password, which overrides this default
     // via @Throttle()). Other endpoints document a 429 in openapi.yaml without an agreed
