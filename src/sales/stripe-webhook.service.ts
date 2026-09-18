@@ -8,7 +8,13 @@ import {
   Prisma,
 } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CheckoutQueueService } from './queue/checkout-queue.service';
 import { StripeService } from './stripe/stripe.service';
+
+interface RefundNeeded {
+  paymentId: string;
+  stripeReferenceId: string;
+}
 
 @Injectable()
 export class StripeWebhookService {
@@ -17,6 +23,7 @@ export class StripeWebhookService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stripeService: StripeService,
+    private readonly checkoutQueueService: CheckoutQueueService,
   ) {}
 
   async handleEvent(rawBody: Buffer, signature: string): Promise<void> {
@@ -35,56 +42,73 @@ export class StripeWebhookService {
     // delivery owns processing it) or claims nothing; when it claims nothing, SELECT ... FOR
     // UPDATE takes a real row lock that blocks until whichever transaction currently owns this
     // event commits or rolls back, so this delivery only ever acts on the true, final state.
-    await this.prisma.$transaction(async (tx) => {
-      const claimed = await tx.$queryRaw<{ id: string }[]>`
+    const refundNeeded = await this.prisma.$transaction(
+      async (tx): Promise<RefundNeeded | null> => {
+        const claimed = await tx.$queryRaw<{ id: string }[]>`
         INSERT INTO stripe_events (stripe_event_id, type, payload, processed_at)
         VALUES (${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb, NULL)
         ON CONFLICT (stripe_event_id) DO NOTHING
         RETURNING id
       `;
 
-      if (claimed.length === 0) {
-        const rows = await tx.$queryRaw<{ processedAt: Date | null }[]>`
+        if (claimed.length === 0) {
+          const rows = await tx.$queryRaw<{ processedAt: Date | null }[]>`
           SELECT processed_at AS "processedAt" FROM stripe_events
           WHERE stripe_event_id = ${event.id} FOR UPDATE
         `;
-        if (rows[0]?.processedAt) {
-          return;
+          if (rows[0]?.processedAt) {
+            return null;
+          }
+          // Still NULL under the lock: the previous claimant crashed or errored before marking
+          // processed_at — R4 says reprocess, not skip, so this falls through to the switch below.
         }
-        // Still NULL under the lock: the previous claimant crashed or errored before marking
-        // processed_at — R4 says reprocess, not skip, so this falls through to the switch below.
-      }
 
-      switch (event.type) {
-        case 'payment_intent.succeeded':
-          await this.handlePaymentIntentSucceeded(tx, event.data.object);
-          break;
-        case 'checkout.session.completed':
-          await this.handleCheckoutSessionCompleted(tx, event.data.object);
-          break;
-        case 'charge.refunded':
-          await this.handleChargeRefunded(tx, event.data.object);
-          break;
-        default:
-          this.logger.log(
-            `Ignoring unhandled Stripe event type: ${event.type}`,
-          );
-      }
+        let refundNeeded: RefundNeeded | null = null;
+        switch (event.type) {
+          case 'payment_intent.succeeded':
+            refundNeeded = await this.handlePaymentIntentSucceeded(
+              tx,
+              event.data.object,
+            );
+            break;
+          case 'checkout.session.completed':
+            refundNeeded = await this.handleCheckoutSessionCompleted(
+              tx,
+              event.data.object,
+            );
+            break;
+          case 'charge.refunded':
+            await this.handleChargeRefunded(tx, event.data.object);
+            break;
+          default:
+            this.logger.log(
+              `Ignoring unhandled Stripe event type: ${event.type}`,
+            );
+        }
 
-      await tx.stripeEvent.update({
-        where: { stripeEventId: event.id },
-        data: { processedAt: new Date() },
-      });
-    });
+        await tx.stripeEvent.update({
+          where: { stripeEventId: event.id },
+          data: { processedAt: new Date() },
+        });
+        return refundNeeded;
+      },
+    );
+
+    // Enqueued after the transaction commits, not inside it — same dual-write reasoning R8 uses
+    // for stock and OrdersService.cancel() uses for its own refund: a partially-failed
+    // transaction has no good answer for which side to trust if a queue write lands mid-way.
+    if (refundNeeded) {
+      await this.checkoutQueueService.enqueueRefund(refundNeeded);
+    }
   }
 
   private async handlePaymentIntentSucceeded(
     tx: Prisma.TransactionClient,
     intent: Stripe.PaymentIntent,
-  ): Promise<void> {
+  ): Promise<RefundNeeded | null> {
     const orderId = intent.metadata.orderId;
     if (!orderId) {
-      return;
+      return null;
     }
 
     let payment: Payment;
@@ -112,24 +136,24 @@ export class StripeWebhookService {
         this.logger.error(
           `payment_intent.succeeded for ${intent.id} (order ${orderId}) has no matching payments row — orphaned PaymentIntent, needs manual reconciliation`,
         );
-        return;
+        return null;
       }
       throw error;
     }
-    await this.finalizeSuccessfulPayment(tx, orderId, payment.method);
+    return this.finalizeSuccessfulPayment(tx, orderId, payment);
   }
 
   private async handleCheckoutSessionCompleted(
     tx: Prisma.TransactionClient,
     session: Stripe.Checkout.Session,
-  ): Promise<void> {
+  ): Promise<RefundNeeded | null> {
     const orderId = session.metadata?.orderId;
     const paymentIntentId =
       typeof session.payment_intent === 'string'
         ? session.payment_intent
         : session.payment_intent?.id;
     if (!orderId || !paymentIntentId) {
-      return;
+      return null;
     }
 
     // No `payments` row exists yet for this flow — it's only born here, once Stripe's session
@@ -145,7 +169,7 @@ export class StripeWebhookService {
         paidAt: new Date(),
       },
     });
-    await this.finalizeSuccessfulPayment(tx, orderId, payment.method);
+    return this.finalizeSuccessfulPayment(tx, orderId, payment);
   }
 
   // The counterpart to checkout.processor.ts's optimistic-refund fix: a refund that wasn't
@@ -173,12 +197,13 @@ export class StripeWebhookService {
 
   // R3's conditional decrement + R8's oversold-still-commits + the PAID transition + its
   // history row + cart clearing, shared by both event handlers so the two payment methods can
-  // never drift on what "successfully paid" actually does to an order.
+  // never drift on what "successfully paid" actually does to an order. Returns a refund
+  // descriptor when this payment landed on an order that won't be fulfilled, null otherwise.
   private async finalizeSuccessfulPayment(
     tx: Prisma.TransactionClient,
     orderId: string,
-    method: PaymentMethod,
-  ): Promise<void> {
+    payment: Pick<Payment, 'id' | 'stripeReferenceId' | 'method'>,
+  ): Promise<RefundNeeded | null> {
     const order = await tx.order.findUniqueOrThrow({
       where: { id: orderId },
       include: { items: true },
@@ -199,7 +224,7 @@ export class StripeWebhookService {
       data: { status: OrderStatus.PAID },
     });
     if (count === 0) {
-      return;
+      return this.refundIfAlreadyCancelled(tx, orderId, payment);
     }
 
     const oversoldItems: string[] = [];
@@ -237,7 +262,7 @@ export class StripeWebhookService {
     // Only the cart-checkout flow (Payment Intent) ever drew from the cart — a Payment Link
     // purchase never touched it, so clearing it here would delete unrelated items the buyer is
     // still browsing.
-    if (method === PaymentMethod.PAYMENT_INTENT) {
+    if (payment.method === PaymentMethod.PAYMENT_INTENT) {
       const cart = await tx.cart.findUnique({
         where: { userId: order.userId },
       });
@@ -245,5 +270,31 @@ export class StripeWebhookService {
         await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
       }
     }
+    return null;
+  }
+
+  // Distinguishes the expected Payment Link dual-event race (the other event already paid this
+  // order — nothing to do) from a payment succeeding for an order the expiry sweep already
+  // cancelled (real money charged, nothing will ever fulfill it) — only the second needs a
+  // refund and a loud log instead of a silent return.
+  private async refundIfAlreadyCancelled(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    payment: Pick<Payment, 'id' | 'stripeReferenceId'>,
+  ): Promise<RefundNeeded | null> {
+    const current = await tx.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (current.status !== OrderStatus.CANCELLED) {
+      return null;
+    }
+    this.logger.error(
+      `Payment ${payment.id} succeeded for order ${orderId} after it was already CANCELLED — enqueuing a refund`,
+    );
+    return {
+      paymentId: payment.id,
+      stripeReferenceId: payment.stripeReferenceId,
+    };
   }
 }
