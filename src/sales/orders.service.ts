@@ -61,6 +61,18 @@ const CANCELLABLE_STATUSES: OrderStatus[] = [
   OrderStatus.PROCESSING,
 ];
 
+// A payment in either state means the buyer may complete (or has completed) payment at any
+// moment — sweeping such an order would let a real Stripe charge land on one nothing will ever
+// fulfill or refund. Only an order with no payment attempt, or only dead (FAILED) ones, is safe
+// to sweep.
+const LIVE_PAYMENT_STATUSES: PaymentStatus[] = [
+  PaymentStatus.PENDING,
+  PaymentStatus.SUCCEEDED,
+];
+const NO_LIVE_PAYMENT_ATTEMPT = {
+  payments: { none: { status: { in: LIVE_PAYMENT_STATUSES } } },
+} as const;
+
 // The two failure modes below are deliberately distinct HTTP statuses (openapi.yaml documents
 // both 403 and 409 for PATCH /orders/{id}/status): a pair with no entry here is unreachable from
 // any role (409 — the resource's state doesn't allow it), while a pair that IS here but whose
@@ -499,7 +511,11 @@ export class OrdersService {
   async sweepExpiredPendingOrders(): Promise<void> {
     const cutoff = new Date(Date.now() - OrdersService.PENDING_ORDER_TTL_MS);
     const expired = await this.prisma.order.findMany({
-      where: { status: OrderStatus.PENDING, createdAt: { lt: cutoff } },
+      where: {
+        status: OrderStatus.PENDING,
+        createdAt: { lt: cutoff },
+        ...NO_LIVE_PAYMENT_ATTEMPT,
+      },
       select: { id: true },
     });
     for (const { id } of expired) {
@@ -508,16 +524,24 @@ export class OrdersService {
   }
 
   private async cancelExpiredPendingOrder(orderId: string): Promise<void> {
-    // No refund path here, unlike cancel(): a PENDING order can never have a SUCCEEDED payment
-    // — the webhook only ever moves a payment to SUCCEEDED together with the order to PAID, in
-    // one transaction (R2/R4) — so there is nothing to refund by definition.
+    // No refund path here, unlike cancel(): this only ever reaches a PENDING order with no live
+    // payment attempt (see NO_LIVE_PAYMENT_ATTEMPT) — there is nothing to refund by definition.
     const cancelled = await this.prisma.$transaction(async (tx) => {
       const currentOrder = await tx.order.findUniqueOrThrow({
         where: { id: orderId },
-        include: { items: true },
+        include: { items: true, payments: true },
       });
       if (currentOrder.status !== OrderStatus.PENDING) {
         return false; // raced with the webhook or a user-initiated cancel — no longer ours
+      }
+      // Re-checked inside the transaction: a payment attempt could have started in the window
+      // between the findMany above and this transaction acquiring the row lock — see the bug
+      // this guards against on NO_LIVE_PAYMENT_ATTEMPT.
+      const hasLivePayment = currentOrder.payments.some((payment) =>
+        LIVE_PAYMENT_STATUSES.includes(payment.status),
+      );
+      if (hasLivePayment) {
+        return false;
       }
       return this.performCancellation(
         tx,

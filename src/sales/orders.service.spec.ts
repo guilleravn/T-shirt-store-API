@@ -1019,5 +1019,60 @@ describe('OrdersService', () => {
       expect(prisma.order.updateMany).not.toHaveBeenCalled();
       expect(prisma.orderStatusHistory.create).not.toHaveBeenCalled();
     });
+
+    it('excludes orders with a live payment attempt from the sweep query itself', async () => {
+      prisma.order.findMany.mockResolvedValue([]);
+
+      await service.sweepExpiredPendingOrders();
+
+      expect(prisma.order.findMany).toHaveBeenCalledWith({
+        where: {
+          status: OrderStatus.PENDING,
+          createdAt: { lt: expect.any(Date) as Date },
+          payments: {
+            none: {
+              status: {
+                in: [PaymentStatus.PENDING, PaymentStatus.SUCCEEDED],
+              },
+            },
+          },
+        },
+        select: { id: true },
+      });
+    });
+
+    it('skips an order whose payment attempt started after the findMany read (TOCTOU)', async () => {
+      prisma.order.findMany.mockResolvedValue([{ id: 'order-1' }]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue(
+        buildOrder({
+          id: 'order-1',
+          status: OrderStatus.PENDING,
+          payments: [{ id: 'pay-1', status: PaymentStatus.PENDING }],
+        }),
+      );
+
+      await service.sweepExpiredPendingOrders();
+
+      expect(prisma.order.updateMany).not.toHaveBeenCalled();
+      expect(prisma.orderStatusHistory.create).not.toHaveBeenCalled();
+    });
+
+    it('still cancels an order whose only payment attempt is a dead FAILED one', async () => {
+      prisma.order.findMany.mockResolvedValue([{ id: 'order-1' }]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue(
+        buildOrder({
+          id: 'order-1',
+          status: OrderStatus.PENDING,
+          payments: [{ id: 'pay-1', status: PaymentStatus.FAILED }],
+        }),
+      );
+
+      await service.sweepExpiredPendingOrders();
+
+      expect(prisma.order.updateMany).toHaveBeenCalledWith({
+        where: { id: 'order-1', status: OrderStatus.PENDING },
+        data: { status: OrderStatus.CANCELLED },
+      });
+    });
   });
 });
