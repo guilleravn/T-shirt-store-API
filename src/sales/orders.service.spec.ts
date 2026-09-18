@@ -1074,5 +1074,24 @@ describe('OrdersService', () => {
         data: { status: OrderStatus.CANCELLED },
       });
     });
+
+    it('keeps processing the rest of the batch when one order throws', async () => {
+      prisma.order.findMany.mockResolvedValue([
+        { id: 'order-1' },
+        { id: 'order-2' },
+      ]);
+      prisma.order.findUniqueOrThrow
+        .mockRejectedValueOnce(new Error('transient DB error'))
+        .mockResolvedValueOnce(
+          buildOrder({ id: 'order-2', status: OrderStatus.PENDING }),
+        );
+
+      await service.sweepExpiredPendingOrders();
+
+      expect(prisma.order.updateMany).toHaveBeenCalledWith({
+        where: { id: 'order-2', status: OrderStatus.PENDING },
+        data: { status: OrderStatus.CANCELLED },
+      });
+    });
   });
 });

@@ -519,7 +519,16 @@ export class OrdersService {
       select: { id: true },
     });
     for (const { id } of expired) {
-      await this.cancelExpiredPendingOrder(id);
+      // Per-order, not a bare loop: one throwing order must not abort every order behind it in
+      // this tick's batch, every 5 minutes, indefinitely if that same order keeps failing.
+      try {
+        await this.cancelExpiredPendingOrder(id);
+      } catch (error) {
+        this.logger.error(
+          `Failed to sweep expired order ${id}`,
+          error instanceof Error ? error.stack : error,
+        );
+      }
     }
   }
 
