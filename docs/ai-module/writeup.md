@@ -2,8 +2,10 @@
 
 > Save as `docs/ai-module/writeup.md`. Short answers and links are enough.
 
-**Repository / PR:** `T-shirt-store-API`, branch `develop` (PR opened after review, per this
-repo's process — commits stay local until then).
+**Repository / PR:** `T-shirt-store-API`. Improvement built on `develop`; a PR review of that work
+(PR #15 at commit `4866457`) found real bugs and process gaps, fixed on
+`fix/expiry-sweep-review-findings` — see [`review-response.md`](review-response.md) for the
+point-by-point response. Commits stay local until review, per this repo's process.
 **Starting commit:** `114acfd` (`Fix/code review (#13)`).
 **Improvement:** Built `OrdersService.sweepExpiredPendingOrders`, a `@Cron(EVERY_5_MINUTES)`
 scheduled job that cancels `PENDING` orders older than 30 minutes with no live payment attempt.
@@ -54,36 +56,44 @@ since most were real but out of scope for a single, small improvement.
 **Evidence:**
 
 - Full-branch audit (all 4 skills run in report-only mode against `develop`, not a single diff):
-  [`docs/ai-module/audit-findings.md`](audit-findings.md) — 20 `docs-sync` findings, 24 oversized-
-  comment findings plus 1 speculative-error-handling and 3 premature-abstraction findings from
-  `clean-code`, zero `nest-patterns` violations, zero `quality-gate` convention violations.
+  [`docs/ai-module/audit-findings.md`](audit-findings.md) — 20 `docs-sync` findings, 23 oversized-
+  comment findings (exact `File:line`s) plus 1 speculative-error-handling and 3
+  premature-abstraction findings from `clean-code`, zero `nest-patterns` violations, zero
+  `quality-gate` convention violations.
 - Before (red): build succeeds (test files aren't type-checked by `nest build`), but
   `npm run test:e2e` on `test/orders-expiry-sweep.e2e-spec.ts` fails —
   `TypeError: ordersService.sweepExpiredPendingOrders is not a function` — written and run before
   commit `bcb3bca` existed.
-- After (green): same test, same command, passes — `Test Suites: 1 passed, Tests: 2 passed`.
-  Full suite: `npm test` → 257/257 (254 pre-existing + 3 new unit tests in commit `bcb3bca`).
-  `npm run test:e2e --runInBand` → 11/11 suites, 23/23 tests, all against the real Postgres/Redis
-  from `npm run docker:up` — no mocks for the sweep's own logic; `CheckoutQueueService` is mocked
-  in these test files only because it needs a real BullMQ/Redis connection it doesn't need for
-  order-creation/cancellation logic, same as the pre-existing sibling e2e files.
+- After (green): same test, same command, passes.
+- **Real `quality-gate` run, fresh session, this branch's head** (dispatched to a Claude Code
+  agent with zero prior conversation context, satisfying the assignment's "run each skill in a
+  fresh session" requirement — full request/response in the session transcript, condensed here):
+
+  | Check              | Status           | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+  | ------------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `npm run build`    | PASS             | `nest build` completes with no errors                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+  | `npm run lint`     | PASS             | no issues                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+  | `npm test`         | PASS             | 22 suites / 263 tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+  | `npm run test:e2e` | FAIL, then fixed | Found a real, reproducible bug: `orders-expiry-sweep.e2e-spec.ts` and `orders.e2e-spec.ts` both hardcoded `Size.position: 9100` (a globally-unique column) — colliding whenever Jest's default parallel workers ran them together. Fixed in commit `575bfb6` (this e2e file now takes the next unused literal, `9800`, matching the staggered-numbering convention every sibling e2e file already uses). Re-verified twice after the fix: `npm run test:e2e` → 11/11 suites, 24/24 tests, clean under Jest's **default parallel** workers — no `--runInBand` needed. |
+
+  The agent also tried `/docs-sync` in the same fresh session: it correctly refused
+  (`disable-model-invocation: true` blocks Skill-tool invocation entirely, by design — see
+  `review-response.md`), which is itself evidence the frontmatter hardening works as intended.
+
 - `quality-gate`'s convention check and `nest-patterns`' full checklist both ran clean against the
-  final diff (`git diff --stat` — 2 files, 193 insertions/34 deletions in `orders.service.ts` plus
-  the new test file) before commit.
+  sweep's own diff before each commit (see commits `054f855` through `575bfb6`).
 
 **Limitations:**
 
-- `npm run test:e2e` is flaky under this repo's default parallel Jest workers once an 11th e2e
-  file (this one) is added — confirmed unrelated to the sweep's logic (10/10 pre-existing suites
-  stay green with the sweep code present but the new test file excluded; all 11/11 pass under
-  `--runInBand`). Root cause looks like local Postgres connection-pool contention under increased
-  worker count, not a defect in this change — noted here rather than silently worked around.
 - `@nestjs/schedule@12.x` (latest) ships ESM-only and breaks this repo's CommonJS Jest setup;
   pinned to `6.1.3` (last CJS release, still within its stated Nest 11 peer range) instead of
   investigating a wider ESM migration, which is out of scope for this improvement.
 - The 30-minute TTL and 5-minute cron cadence are reasonable judgment calls, not values agreed
   with anyone — easy to move to an env var later if that's ever needed.
-- Everything in `audit-findings.md` beyond what this improvement's two docs commits fixed is
-  real but intentionally left unresolved (e.g. several `openapi.yaml` response-code mismatches,
-  three duplicated constants, one unreachable `if` in `auth.service.ts`) — out of scope for a
-  single, two-day improvement, flagged for a follow-up.
+- Everything in `audit-findings.md` beyond what this improvement's docs commits fixed is real
+  but intentionally left unresolved (e.g. several `openapi.yaml` response-code mismatches, three
+  duplicated constants) — out of scope for a single, two-day improvement, flagged for follow-up.
+- One review suggestion was deliberately not implemented (narrowing or folding `nest-patterns`),
+  and one attempted fix (`paths:` frontmatter on `nest-patterns`) was reverted after live testing
+  showed it broke the skill entirely rather than improving it — both explained in
+  [`review-response.md`](review-response.md).
