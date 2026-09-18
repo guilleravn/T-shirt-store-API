@@ -2,8 +2,8 @@
 name: nest-patterns
 description: Check a diff for correct NestJS mechanics — constructor DI, decorator usage, module registration, and guard/pipe order — as distinct from where business logic belongs. Use whenever a change adds or edits a controller, provider, guard, or module.
 argument-hint: [scope]
-allowed-tools: Read, Grep, Glob
-paths: src/**/*.controller.ts, src/**/*.service.ts, src/**/*.guard.ts, src/**/*.module.ts, src/**/*.factory.ts
+allowed-tools: Read, Grep, Glob, Bash(.claude/skills/scope.sh:*)
+arguments: [scope]
 ---
 
 # Nest patterns
@@ -13,12 +13,13 @@ but not whether NestJS itself is wired correctly — a provider missing `@Inject
 registered in the wrong order, or a module that never exports something another module needs are
 mechanical mistakes that layer conventions alone don't catch. This skill checks the wiring.
 
+## Files in scope
+
+!`.claude/skills/scope.sh $scope`
+
 ## Procedure
 
-1. **Determine scope.** Default to `git diff --cached` (staged changes). If the user names a
-   commit range or file list instead, use that.
-
-2. **For every changed controller, provider, guard, or module, check:**
+1. **For every controller, provider, guard, or module listed above, check:**
 
    | Check                   | What's correct                                                                                                                                                                                                                                                                                                           |
    | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -29,9 +30,9 @@ mechanical mistakes that layer conventions alone don't catch. This skill checks 
    | Module registration     | A new provider/controller is declared in its owning module's `providers`/`controllers` array (see the module-ownership table in `coding-style.md`); anything another module needs is in that module's `exports`, not reached via a relative import into its internals.                                                   |
    | No circular workarounds | No `forwardRef()` introduced to paper over a module boundary that's actually wrong — if one module needs another's provider, check whether the ownership table means the code belongs in the other module instead.                                                                                                       |
 
-3. **Report** a table — `File:line | Check | Status | Fix` — for every check that applies to the
-   diff (skip a row entirely if nothing in the diff exercises it, don't mark it PASS by default).
-   End with one line: does this diff violate anything, yes or no.
+2. **Report** a table — `File:line | Check | Status | Fix` — for every check that applies to the
+   files above (skip a row entirely if nothing in scope exercises it, don't mark it PASS by
+   default). End with one line: does this diff violate anything, yes or no.
 
 ## What this is not
 
