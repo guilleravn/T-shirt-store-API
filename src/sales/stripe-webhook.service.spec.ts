@@ -2,6 +2,7 @@ import { Test } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import { StripeWebhookService } from './stripe-webhook.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { CheckoutQueueService } from './queue/checkout-queue.service';
 import { StripeService } from './stripe/stripe.service';
 import {
   OrderStatus,
@@ -77,16 +78,19 @@ describe('StripeWebhookService', () => {
   let service: StripeWebhookService;
   let prisma: ReturnType<typeof buildPrismaMock>;
   let stripeService: { constructWebhookEvent: jest.Mock };
+  let checkoutQueueService: { enqueueRefund: jest.Mock };
 
   beforeEach(async () => {
     prisma = buildPrismaMock();
     stripeService = { constructWebhookEvent: jest.fn() };
+    checkoutQueueService = { enqueueRefund: jest.fn() };
 
     const module = await Test.createTestingModule({
       providers: [
         StripeWebhookService,
         { provide: PrismaService, useValue: prisma },
         { provide: StripeService, useValue: stripeService },
+        { provide: CheckoutQueueService, useValue: checkoutQueueService },
       ],
     }).compile();
 
@@ -337,6 +341,30 @@ describe('StripeWebhookService', () => {
       });
       expect(prisma.orderStatusHistory.create).not.toHaveBeenCalled();
       expect(prisma.cartItem.deleteMany).not.toHaveBeenCalled();
+      expect(checkoutQueueService.enqueueRefund).not.toHaveBeenCalled();
+    });
+
+    it('enqueues a refund when the payment succeeds after the expiry sweep already cancelled the order', async () => {
+      // Distinct from the dual-event race above: here the order is genuinely CANCELLED, not
+      // raced to PAID by the other event — a real charge with nothing that will ever fulfill it.
+      mockEvent();
+      prisma.payment.update.mockResolvedValue({
+        id: 'pay-1',
+        stripeReferenceId: 'pi_1',
+        method: PaymentMethod.PAYMENT_INTENT,
+      });
+      prisma.order.findUniqueOrThrow
+        .mockResolvedValueOnce(buildOrder())
+        .mockResolvedValueOnce({ status: OrderStatus.CANCELLED });
+      prisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+      await service.handleEvent(Buffer.from('{}'), 'sig');
+
+      expect(checkoutQueueService.enqueueRefund).toHaveBeenCalledWith({
+        paymentId: 'pay-1',
+        stripeReferenceId: 'pi_1',
+      });
+      expect(prisma.orderStatusHistory.create).not.toHaveBeenCalled();
     });
 
     it('does not clear the cart for a PAYMENT_LINK payment', async () => {

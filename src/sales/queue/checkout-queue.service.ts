@@ -8,7 +8,8 @@ interface RefundPaymentJobData {
   stripeReferenceId: string;
 }
 
-// The only thing OrdersService talks to — never the raw queue, never StripeService directly.
+// The only thing OrdersService and StripeWebhookService talk to — never the raw queue, never
+// StripeService directly.
 @Injectable()
 export class CheckoutQueueService {
   constructor(

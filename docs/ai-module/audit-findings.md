@@ -7,8 +7,12 @@
 
 ## `quality-gate`
 
-**Executable checks** (whole-repo, already run and valid): `npm run build` — pass. `npm run lint`
-— clean. `npm test` — 254/254 passing, 22/22 suites.
+**Executable checks** (whole-repo): `npm run build` — pass. `npm run lint` — clean. `npm test` —
+263/263 passing, 22/22 suites (254 at the time of this whole-branch audit; grew to 263 as the
+sweep's bug fixes added their own unit tests). Re-run for real, in a fresh session with no prior
+conversation context, at this branch's head — see `writeup.md`'s Evidence section for the actual
+command output and exit codes, and the `test:e2e` result (a real, now-fixed test-isolation bug it
+caught along the way).
 
 **Convention check** (layer/money rules from `docs/conventions/coding-style.md`, all 12
 controllers / 57 DTOs / 18 services): no real violations. Two things checked and explicitly
@@ -22,9 +26,10 @@ cleared, not missed:
 
 ## `docs-sync`
 
-Eighteen real drifts found across the 5 modules plus the schema/ERD pair, `openapi.yaml`, and
-`docs/architecture.md`. Two are already fixed (marked below); the rest are new findings from this
-audit, left unfixed pending a decision (see writeup Limitations).
+Twenty items tracked below (`#1`-`#20`) across the 5 modules plus the schema/ERD pair,
+`openapi.yaml`, and `docs/architecture.md`. Three are already fixed (marked below); the
+remaining seventeen are new findings from this audit, left unfixed pending a decision (see
+writeup Limitations).
 
 ### Already fixed this session
 
@@ -75,18 +80,44 @@ Six-point checklist applied to every file in `src/` (auth, catalog, engagement, 
 common, email, prisma, root). This codebase already went through one review pass (`114acfd`), so
 the yield is concentrated in one check.
 
-**Oversized comments (>4 lines)** — 24 instances, concentrated in Sales (12) and Auth (4), the
-two most concurrency-sensitive modules:
+**Oversized comments (>4 lines)** — 23 instances (re-verified in a fresh session on
+`fix/expiry-sweep-review-findings`'s head, after the sweep fixes landed — line numbers below are
+current, not the pre-fix snapshot). Every one is valid, non-redundant WHY reasoning (race
+conditions, invariant cross-references) — flagged purely on length, not content quality, which is
+exactly why `clean-code` now reports this check instead of auto-editing it (see the skill's own
+fix history). Exact ranges:
 
-| Module     | Files                                                                                                                                                                                                                                                                                              |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth       | `auth.service.ts` (×2), `guards/roles.guard.ts`, `utils/token.util.ts`                                                                                                                                                                                                                             |
-| Engagement | `cart.service.ts`                                                                                                                                                                                                                                                                                  |
-| Sales      | `orders.service.ts` (×3), `checkout.service.ts` (×2), `promo-redemption.util.ts`, `purchasability.util.ts`, `stripe-webhook.controller.ts`, `stripe-webhook.service.ts` (×5, one up to 10 lines), `stripe-webhook.service.spec.ts`, `stripe/stripe.service.ts` (×2), `queue/checkout.processor.ts` |
-| Common     | `common/prisma-error.util.ts`                                                                                                                                                                                                                                                                      |
+| #   | File:line                                          | Length | Topic                                                                |
+| --- | -------------------------------------------------- | ------ | -------------------------------------------------------------------- |
+| 1   | `src/auth/auth.service.ts:104-108`                 | 5      | reused-refresh-token theft-response note                             |
+| 2   | `src/auth/auth.service.ts:180-185`                 | 6      | `pg_advisory_xact_lock` rationale in `forgotPassword`                |
+| 3   | `src/auth/guards/roles.guard.ts:11-15`             | 5      | CASL-vs-plain-role-check note                                        |
+| 4   | `src/auth/utils/token.util.ts:3-7`                 | 5      | sha256-vs-bcrypt rationale                                           |
+| 5   | `src/engagement/cart.service.ts:74-79`             | 6      | atomic upsert rationale in `addItem`                                 |
+| 6   | `src/sales/orders.service.ts:204-209`              | 6      | partial unique index race note in `create()`'s catch                 |
+| 7   | `src/sales/orders.service.ts:366-371`              | 6      | conditional UPDATE race note in `updateStatus`                       |
+| 8   | `src/sales/checkout.service.ts:106-113`            | 8      | `SELECT ... FOR UPDATE` re-verify rationale in `createPaymentIntent` |
+| 9   | `src/sales/checkout.service.ts:236-240`            | 5      | no-payments-row-yet note before `createPaymentLink`'s Stripe call    |
+| 10  | `src/sales/promo-redemption.util.ts:23-28`         | 6      | file-level rationale above `lockAndValidatePromoCode`                |
+| 11  | `src/sales/purchasability.util.ts:14-19`           | 6      | duplication-from-`CartService` rationale                             |
+| 12  | `src/sales/stripe-webhook.controller.ts:14-18`     | 5      | no-guards/no-DTO rationale                                           |
+| 13  | `src/sales/stripe-webhook.service.ts:37-44`        | 8      | R4 idempotency-claim rationale above `handleEvent`'s transaction     |
+| 14  | `src/sales/stripe-webhook.service.ts:131-135`      | 5      | orphaned-PaymentIntent P2025 handling note                           |
+| 15  | `src/sales/stripe-webhook.service.ts:175-180`      | 6      | `handleChargeRefunded` doc comment                                   |
+| 16  | `src/sales/stripe-webhook.service.ts:212-221`      | 10     | dual-event race rationale in `finalizeSuccessfulPayment`             |
+| 17  | `src/sales/stripe-webhook.service.spec.ts:322-326` | 5      | comment inside the dual-event race test                              |
+| 18  | `src/sales/stripe/stripe.service.ts:21-25`         | 5      | Checkout-Session-vs-Payment-Link rationale                           |
+| 19  | `src/sales/stripe/stripe.service.ts:82-89`         | 8      | `refundPayment` doc comment                                          |
+| 20  | `src/sales/queue/checkout.processor.ts:43-48`      | 6      | refund-status handling rationale                                     |
+| 21  | `src/catalog/dto/list-products-query.dto.ts:13-17` | 5      | `toBoolean()` rationale                                              |
+| 22  | `src/catalog/dto/list-variants-query.dto.ts:4-8`   | 5      | `toBoolean()` rationale                                              |
+| 23  | `src/catalog/product-images.service.ts:154-158`    | 5      | DB-before-S3-delete ordering rationale in `remove()`                 |
 
-Every one of these is valid, non-redundant WHY reasoning (race conditions, invariant
-cross-references) — flagged purely on length, not content quality.
+`src/common/prisma-error.util.ts` has zero — its only long comment is a JSDoc `/** */` block,
+which this check doesn't count (single `//`-line comments only). The count moved from an earlier,
+less precise 24-by-filename tally to this exact 23-by-line-range list specifically because a
+prior pass of this document listed hits by filename+count instead of `File:line`, which this
+skill's own report format requires — re-extracted properly here.
 
 **Speculative error handling** — 1 instance: `src/auth/auth.service.ts:136-139`, an
 `if (!user) throw UnauthorizedException` inside the refresh transaction that's unreachable —
@@ -100,7 +131,8 @@ cross-references) — flagged purely on length, not content quality.
 **Dead code** — the default Nest-scaffold `AppController`/`AppService` ("Hello World!") and its
 spec file were never adapted to the product; `GET /v1` isn't part of `openapi.yaml`'s contract.
 
-**Duplication** (flagged as a bonus finding — not yet one of the skill's 6 checks):
+**Duplication** (flagged as a bonus finding, outside the skill's 6-row checklist by design — see
+`review-response.md` for why a 7th row wasn't added):
 
 - `toBoolean()` helper + its comment, duplicated verbatim in `list-products-query.dto.ts` and
   `list-variants-query.dto.ts` (already known from the `114acfd` review).

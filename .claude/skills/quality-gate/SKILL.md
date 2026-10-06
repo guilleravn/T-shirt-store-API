@@ -1,6 +1,10 @@
 ---
 name: quality-gate
 description: Run build, lint, and tests, then check the diff against docs/conventions/coding-style.md's module/layer conventions and the money-as-integer-cents rule, reporting PASS/FAIL per check. Use before committing a slice, or whenever asked to verify a change is clean and ready to commit.
+argument-hint: [scope]
+allowed-tools: Bash, Read, Grep, Glob, Bash(.claude/skills/scope.sh:*)
+context: fork
+arguments: [scope]
 ---
 
 # Quality gate
@@ -10,13 +14,16 @@ when it's done ad hoc — a quick look at the diff isn't the same as running the
 "looks fine" isn't a substitute for `npm test` actually exiting 0. This skill always runs the
 real checks and always reports all of them, not just the one that seemed relevant.
 
+## Files in scope
+
+!`.claude/skills/scope.sh $scope`
+
+The executable checks in step 1 always run against the whole repo regardless of the list above;
+it only feeds step 2's convention check.
+
 ## Procedure
 
-1. **Determine scope.** Default to `git diff --cached` (staged changes). If the user names a
-   commit range or branch instead, use that for step 3; the executable checks in step 2 always
-   run against the whole repo regardless of scope.
-
-2. **Run the executable checks, in order, and capture the result of each:**
+1. **Run the executable checks, in order, and capture the result of each:**
 
    | Command            | Reports                                                                                                                       |
    | ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -28,7 +35,7 @@ real checks and always reports all of them, not just the one that seemed relevan
    For any FAIL, condense the actual error output (file:line + message) rather than pasting the
    full log.
 
-3. **Check the diffed files against `docs/conventions/coding-style.md`:**
+2. **Check the files listed above against `docs/conventions/coding-style.md`:**
    - Controller methods: route wiring only — no business conditionals, no direct Prisma calls.
    - DTOs: validation/shape only — no logic beyond that.
    - Services: business logic and transactions live here, not in controllers.
@@ -38,7 +45,7 @@ real checks and always reports all of them, not just the one that seemed relevan
    Report each violation found with its file:line. No violations found is also a result — say so
    explicitly.
 
-4. **Report a consolidated table** — `Check | Status | Notes` — covering all four executable
+3. **Report a consolidated table** — `Check | Status | Notes` — covering all four executable
    checks (or three plus "e2e skipped" if declined) and the convention check, followed by one
    line: is this clean to commit, yes or no. If no, name the exact fix, don't just flag the
    problem.
